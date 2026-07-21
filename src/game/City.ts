@@ -343,18 +343,21 @@ export class City {
   private addLandmarkProps(id: string, group: THREE.Group, accent: number) {
     switch (id) {
       case 'tokyo': {
+        // Set fully to one side of the line — centered on local x=0 it sat
+        // straight across the rails.
         const facade = new THREE.Mesh(
           new THREE.BoxGeometry(46, 16, 12),
           new THREE.MeshStandardMaterial({ color: 0x7a3b2e, roughness: 0.8 }),
         )
-        facade.position.set(0, 8, -55)
+        facade.position.set(40, 8, -55)
+        facade.rotation.y = 0.15
         group.add(facade)
         for (const dx of [-18, 0, 18]) {
           const dome = new THREE.Mesh(
             new THREE.SphereGeometry(4, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
             new THREE.MeshStandardMaterial({ color: 0x4a2a20 }),
           )
-          dome.position.set(dx, 16, -55)
+          dome.position.set(40 + dx, 16, -55 - dx * 0.15)
           group.add(dome)
         }
         break
@@ -384,13 +387,18 @@ export class City {
         break
       }
       case 'shinjuku': {
-        for (let i = 0; i < 6; i++) {
+        // Both flanks of the line, but never ON it: |x| >= 34 keeps every
+        // tower (max half-width 12) well clear of the rail corridor, which
+        // runs along local x≈0. The old spread (-60 + i*22) parked one
+        // skyscraper straight across the tracks.
+        const towerXs = [-88, -60, -34, 34, 62, 90]
+        for (let i = 0; i < towerXs.length; i++) {
           const h = 90 + Math.random() * 90
           const tower = new THREE.Mesh(
             new THREE.BoxGeometry(14 + Math.random() * 10, h, 14 + Math.random() * 10),
             new THREE.MeshStandardMaterial({ color: 0x3d4658, emissive: 0x223355, emissiveIntensity: 0, metalness: 0.4, roughness: 0.35 }),
           )
-          tower.position.set(-60 + i * 22, h / 2, -60 - (i % 2) * 20)
+          tower.position.set(towerXs[i], h / 2, -60 - (i % 2) * 25)
           tower.castShadow = true
           this.nightGlowMaterials.push(tower.material as THREE.MeshStandardMaterial)
           group.add(tower)
@@ -402,30 +410,34 @@ export class City {
         // landmark payoff. (Deliberately Inari-red rather than Meiji Jingu's
         // unpainted cypress: this is a generic gate, and the red reads from
         // the cab.) Myōjin style: kasagi with upturned tips + shimaki + nuki.
+        // The whole gate ensemble lives beside the line (centered at local
+        // x=+24) — a torii straddling a working railway would be nonsense,
+        // and its legs used to bracket the rails.
+        const TORII_X = 24
         const vermilion = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.65 })
         const kasagi = new THREE.Mesh(new THREE.BoxGeometry(22, 1.5, 1.6), vermilion)
-        kasagi.position.set(0, 13.6, 50)
+        kasagi.position.set(TORII_X, 13.6, 50)
         for (const end of [-1, 1]) {
           const tip = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.4, 1.6), vermilion)
-          tip.position.set(end * 11.6, 14.15, 50)
+          tip.position.set(TORII_X + end * 11.6, 14.15, 50)
           tip.rotation.z = -end * 0.3
           tip.castShadow = true
           group.add(tip)
         }
         const shimaki = new THREE.Mesh(new THREE.BoxGeometry(19, 1.1, 1.4), vermilion)
-        shimaki.position.set(0, 12.3, 50)
+        shimaki.position.set(TORII_X, 12.3, 50)
         const nuki = new THREE.Mesh(new THREE.BoxGeometry(17, 0.9, 1.1), vermilion)
-        nuki.position.set(0, 9.2, 50)
+        nuki.position.set(TORII_X, 9.2, 50)
         const legGeo = new THREE.CylinderGeometry(0.85, 0.95, 13, 10)
         const legL = new THREE.Mesh(legGeo, vermilion)
-        legL.position.set(-7, 6.5, 50)
+        legL.position.set(TORII_X - 7, 6.5, 50)
         const legR = new THREE.Mesh(legGeo, vermilion)
-        legR.position.set(7, 6.5, 50)
+        legR.position.set(TORII_X + 7, 6.5, 50)
         kasagi.castShadow = shimaki.castShadow = legL.castShadow = legR.castShadow = true
         group.add(kasagi, shimaki, nuki, legL, legR)
         const pineTrunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3527 })
         const pineMat = new THREE.MeshStandardMaterial({ color: 0x2e4a2e, roughness: 1 })
-        for (const [px, pz] of [[-13, 46], [12, 54], [-11, 57], [14, 44]]) {
+        for (const [px, pz] of [[11, 46], [36, 54], [13, 57], [38, 44]]) {
           const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, 3.4, 6), pineTrunkMat)
           trunk.position.set(px, 1.7, pz)
           const foliage = new THREE.Mesh(new THREE.ConeGeometry(2.4, 6.4, 8), pineMat)
@@ -433,12 +445,15 @@ export class City {
           trunk.castShadow = foliage.castShadow = true
           group.add(trunk, foliage)
         }
-        for (let i = 0; i < 5; i++) {
+        // Takeshita-dori color, flanking the approach — never centered on
+        // x=0, where the rails run.
+        const shopXs = [-60, -38, -18, 20, 42]
+        for (let i = 0; i < shopXs.length; i++) {
           const shop = new THREE.Mesh(
             new THREE.BoxGeometry(8, 8 + Math.random() * 6, 8),
             new THREE.MeshStandardMaterial({ color: [0xff5da2, 0xffc857, 0x5ad1e0, 0x8fce6a][i % 4], emissive: 0x111111, emissiveIntensity: 0 }),
           )
-          shop.position.set(-40 + i * 20, 5, -55)
+          shop.position.set(shopXs[i], 5, -55)
           this.nightGlowMaterials.push(shop.material as THREE.MeshStandardMaterial)
           group.add(shop)
         }

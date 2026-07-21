@@ -412,35 +412,42 @@ export function makeNeonSignTexture(text: string, bg: string, fg: string): THREE
   return tex
 }
 
-/** Big, faint city-block pattern for the ground plane so the world floor isn't one flat color. */
+/**
+ * Soft, irregular urban mottling for the ground plane — overlapping tonal
+ * blotches with no hard edges or straight lines, so no tiling grid ever
+ * reads from the cab. (An earlier version drew a street grid; from eye
+ * height it looked like graph paper, not a city.)
+ */
 export function makeGroundTexture(): THREE.CanvasTexture {
   const size = 1024
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
   const ctx = canvas.getContext('2d')!
-  ctx.fillStyle = '#2a3029'
+  ctx.fillStyle = '#2b302a'
   ctx.fillRect(0, 0, size, size)
-  // Irregular city blocks in slightly varied tones.
-  const cell = 128
-  for (let y = 0; y < size; y += cell) {
-    for (let x = 0; x < size; x += cell) {
-      const tones = ['#2c332b', '#293027', '#2e332e', '#2b2f2c', '#30362c']
-      ctx.fillStyle = tones[Math.floor(Math.random() * tones.length)]
-      ctx.fillRect(x + 3, y + 3, cell - 6, cell - 6)
-      // Occasional park-green or paved-gray block.
-      if (Math.random() < 0.12) {
-        ctx.fillStyle = Math.random() < 0.5 ? '#33402d' : '#33363a'
-        ctx.fillRect(x + 10, y + 10, cell - 20, cell - 20)
-      }
-    }
+
+  // Large soft blotches in near-identical tones — reads as patchy earth,
+  // asphalt and scrub from a distance without any recognizable pattern.
+  const tones = ['#2d332c', '#292e28', '#2f342e', '#2c312e', '#31372d', '#2a2f2b']
+  for (let i = 0; i < 260; i++) {
+    const x = Math.random() * size
+    const y = Math.random() * size
+    const r = 30 + Math.random() * 110
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r)
+    const tone = tones[Math.floor(Math.random() * tones.length)]
+    g.addColorStop(0, tone + 'cc')
+    g.addColorStop(1, tone + '00')
+    ctx.fillStyle = g
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
   }
-  // Street grid between blocks.
-  ctx.strokeStyle = 'rgba(70,75,80,0.55)'
-  ctx.lineWidth = 6
-  for (let i = 0; i <= size; i += cell) {
-    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, size); ctx.stroke()
-    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(size, i); ctx.stroke()
+  // Fine speckle for a little texture up close.
+  for (let i = 0; i < 1600; i++) {
+    const shade = Math.random() < 0.5 ? 0 : 255
+    ctx.fillStyle = `rgba(${shade},${shade},${shade},${(0.02 + Math.random() * 0.04).toFixed(3)})`
+    ctx.fillRect(Math.random() * size, Math.random() * size, 2 + Math.random() * 3, 2 + Math.random() * 3)
   }
   const tex = new THREE.CanvasTexture(canvas)
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping

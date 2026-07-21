@@ -99,8 +99,10 @@ function buildLoopCurve(): THREE.CatmullRomCurve3 {
     const squash = 0.82 + 0.18 * Math.pow(Math.abs(Math.sin(a * 0.5)), 1.5)
     const x = Math.sin(a) * rx
     const z = -Math.cos(a) * rz * squash
-    const y = Math.sin(a * 6) * 2.2 + Math.sin(a * 1.7 + 1) * 3.5
-    points.push(new THREE.Vector3(x, y, z))
+    // Flat: the ground plane is a single level, so any vertical undulation
+    // here either sinks the cab below the ground or leaves stations floating
+    // above it. Grade changes need a ground that follows the track first.
+    points.push(new THREE.Vector3(x, 0, z))
   }
   return new THREE.CatmullRomCurve3(points, true, 'catmullrom', 0.4)
 }

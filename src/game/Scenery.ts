@@ -251,8 +251,11 @@ export class Scenery {
     const fujiPos = new THREE.Vector3(-3650, 310, 2600)
     fuji.position.copy(fujiPos)
     this.scene.add(fuji)
-    const snow = new THREE.Mesh(new THREE.ConeGeometry(1550 * 0.34, 760 * 0.34, 48, 1, false), this.fujiSnowMat)
-    snow.position.set(fujiPos.x, fujiPos.y + 760 * 0.33, fujiPos.z)
+    // Snow cap: slightly WIDER slope than the body and a hair taller, so its
+    // surface sits strictly proud of the mountain — same-slope cones sharing
+    // the apex were perfectly coplanar and shimmered with z-fighting.
+    const snow = new THREE.Mesh(new THREE.ConeGeometry(1550 * 0.365, 760 * 0.34, 48, 1, false), this.fujiSnowMat)
+    snow.position.set(fujiPos.x, fujiPos.y + 760 * 0.335, fujiPos.z)
     this.scene.add(snow)
 
     // ——— Tokyo Tower near Hamamatsucho: red/white banded lattice silhouette.
