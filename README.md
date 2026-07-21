@@ -2,7 +2,7 @@
 
 Un simulador de conducción de trenes en 3D para navegador, ambientado en la línea circular Yamanote de Tokio. Enfocado en móvil, pensado para jugarse con el pulgar, con un ciclo completo de iluminación día/noche y melodías de estación originales.
 
-**Juega en staging:** _(se añade el enlace tras el primer despliegue en GitHub Pages)_
+**Juega en staging:** https://ruben-arconada.github.io/Yamanote-Fun/
 
 ## Qué hay dentro
 
