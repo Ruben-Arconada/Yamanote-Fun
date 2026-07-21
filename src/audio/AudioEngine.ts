@@ -81,11 +81,20 @@ export class AudioEngine {
   }
   private voicesReady = false
 
+  private motorSubOsc: OscillatorNode | null = null
+
   private duckUntil = 0
   private melodyLoopHandle: number | null = null
   private autoResumeInstalled = false
   private announcing = false
   private announceQueue: QueuedAnnouncement[] = []
+  private lastAmbientAt = 0
+  private jointTimer = 0.8
+  private ambNextAt = 0
+  private paBedGain: GainNode | null = null
+  private paBedSource: AudioBufferSourceNode | null = null
+  private crowdGain: GainNode | null = null
+  private footstepNextAt = 0
 
   get ready() {
     return this.ctx !== null
@@ -218,19 +227,26 @@ export class AudioEngine {
 
   private startAmbientBed() {
     const ctx = this.ctx!
-    // Motor hum: a low sawtooth run through a lowpass, pitch/gain track speed.
+    // Motor hum: a triangle fundamental plus a sine an octave below, through
+    // a gentle lowpass — rounder and warmer than the old raw sawtooth, which
+    // read as an angry buzz rather than a traction motor.
     this.motorOsc = ctx.createOscillator()
-    this.motorOsc.type = 'sawtooth'
+    this.motorOsc.type = 'triangle'
     this.motorOsc.frequency.value = 60
+    this.motorSubOsc = ctx.createOscillator()
+    this.motorSubOsc.type = 'sine'
+    this.motorSubOsc.frequency.value = 30
     this.motorFilter = ctx.createBiquadFilter()
     this.motorFilter.type = 'lowpass'
     this.motorFilter.frequency.value = 200
     this.motorGain = ctx.createGain()
     this.motorGain.gain.value = 0
     this.motorOsc.connect(this.motorFilter)
+    this.motorSubOsc.connect(this.motorFilter)
     this.motorFilter.connect(this.motorGain)
     this.motorGain.connect(this.master!)
     this.motorOsc.start()
+    this.motorSubOsc.start()
 
     // Rolling wheel/rail noise bed.
     this.noiseSource = ctx.createBufferSource()
@@ -265,20 +281,28 @@ export class AudioEngine {
     this.roomToneSource.start()
   }
 
-  /** speed01: 0..1 fraction of top speed. brakeAmount: 0..1 how hard braking. */
-  updateAmbient(speed01: number, brakeAmount: number) {
+  /**
+   * speed01: 0..1 fraction of top speed. brakeAmount: 0..1 how hard braking.
+   * hour: game time of day, drives the nature/city soundscape. crowd: 0..1
+   * how much boarding bustle to play (doors-open amount).
+   */
+  updateAmbient(speed01: number, brakeAmount: number, hour = 12, crowd = 0) {
     if (!this.ctx) return
     const t = this.ctx.currentTime
+    const dt = Math.min(Math.max(t - this.lastAmbientAt, 0), 0.1)
+    this.lastAmbientAt = t
     const eased = Math.pow(speed01, 0.6)
     const ducked = t < this.duckUntil
     const duckMul = ducked ? 0.5 : 1
 
-    this.motorOsc?.frequency.setTargetAtTime(55 + eased * 220, t, 0.08)
-    this.motorFilter?.frequency.setTargetAtTime(150 + eased * 900, t, 0.08)
-    this.motorGain?.gain.setTargetAtTime(speed01 > 0.01 ? (0.05 + eased * 0.12) * duckMul : 0, t, 0.15)
+    // Softer motor: lower ceiling than before, and the sub follows an octave down.
+    this.motorOsc?.frequency.setTargetAtTime(55 + eased * 190, t, 0.08)
+    this.motorSubOsc?.frequency.setTargetAtTime((55 + eased * 190) / 2, t, 0.08)
+    this.motorFilter?.frequency.setTargetAtTime(130 + eased * 640, t, 0.08)
+    this.motorGain?.gain.setTargetAtTime(speed01 > 0.01 ? (0.045 + eased * 0.095) * duckMul : 0, t, 0.15)
 
     this.noiseFilter?.frequency.setTargetAtTime(300 + eased * 2200, t, 0.1)
-    this.noiseGain?.gain.setTargetAtTime(speed01 > 0.01 ? (0.02 + eased * 0.06) * duckMul : 0, t, 0.15)
+    this.noiseGain?.gain.setTargetAtTime(speed01 > 0.01 ? (0.02 + eased * 0.055) * duckMul : 0, t, 0.15)
 
     if (brakeAmount > 0.55 && speed01 > 0.03 && speed01 < 0.5) {
       this.noiseFilter?.frequency.setTargetAtTime(1800 + brakeAmount * 1500, t, 0.05)
@@ -287,6 +311,258 @@ export class AudioEngine {
 
     const stillness = 1 - Math.min(1, speed01 * 6)
     this.roomToneGain?.gain.setTargetAtTime(0.03 * stillness * duckMul, t, 0.4)
+
+    this.updateRailJoints(dt, speed01, duckMul)
+    this.updateTimeAmbience(t, hour, speed01, duckMul)
+    this.updateCrowd(t, hour, crowd, duckMul)
+  }
+
+  /** The da-dum of rail joints: paired soft clacks whose cadence tracks speed. */
+  private updateRailJoints(dt: number, speed01: number, duckMul: number) {
+    if (speed01 < 0.06) return
+    this.jointTimer -= dt
+    if (this.jointTimer > 0) return
+    this.jointTimer = Math.min(Math.max(1.7 - speed01 * 1.15, 0.55), 1.7)
+    const t = this.ctx!.currentTime
+    const vol = (0.03 + speed01 * 0.05) * duckMul
+    this.railClack(t + 0.01, vol)
+    this.railClack(t + 0.105, vol * 0.85)
+  }
+
+  private railClack(when: number, vol: number) {
+    const ctx = this.ctx!
+    const src = ctx.createBufferSource()
+    src.buffer = this.noiseBuffer
+    src.playbackRate.value = 0.8 + Math.random() * 0.3
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.frequency.value = 320 + Math.random() * 120
+    filter.Q.value = 1.2
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0, when)
+    g.gain.linearRampToValueAtTime(vol, when + 0.005)
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.06)
+    src.connect(filter)
+    filter.connect(g)
+    g.connect(this.master!)
+    src.start(when)
+    src.stop(when + 0.09)
+  }
+
+  /**
+   * Nature/city soundscape by game hour, loudest when the train is still:
+   * dawn songbirds, daytime cicadas, evening higurashi, night crickets.
+   */
+  private updateTimeAmbience(t: number, hour: number, speed01: number, duckMul: number) {
+    if (t < this.ambNextAt) return
+    const still = 1 - Math.min(1, speed01 * 0.85)
+    const vol = still * duckMul
+    if (vol < 0.15) {
+      this.ambNextAt = t + 1.2
+      return
+    }
+    if (hour >= 4.5 && hour < 9) {
+      this.playBirdChirp(t, 0.032 * vol)
+      this.ambNextAt = t + 1.6 + Math.random() * 3.4
+    } else if (hour >= 9 && hour < 17) {
+      this.playCicada(t, 0.014 * vol)
+      this.ambNextAt = t + 2.2 + Math.random() * 3.6
+    } else if (hour >= 17 && hour < 19.5) {
+      this.playHigurashi(t, 0.022 * vol)
+      this.ambNextAt = t + 2.6 + Math.random() * 3.2
+    } else {
+      this.playCrickets(t, 0.02 * vol)
+      this.ambNextAt = t + 0.9 + Math.random() * 1.4
+    }
+  }
+
+  /** 2–4 quick upward sine sweeps — a generic songbird, uguisu-adjacent. */
+  private playBirdChirp(when: number, vol: number) {
+    const ctx = this.ctx!
+    const n = 2 + Math.floor(Math.random() * 3)
+    let start = when + 0.02
+    for (let i = 0; i < n; i++) {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      const f0 = 2200 + Math.random() * 900
+      osc.frequency.setValueAtTime(f0, start)
+      osc.frequency.exponentialRampToValueAtTime(f0 * (1.25 + Math.random() * 0.3), start + 0.07)
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, start)
+      g.gain.linearRampToValueAtTime(vol, start + 0.012)
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.1)
+      osc.connect(g)
+      g.connect(this.dryGain!)
+      g.connect(this.wetSend!)
+      osc.start(start)
+      osc.stop(start + 0.12)
+      start += 0.1 + Math.random() * 0.12
+    }
+  }
+
+  /** A short pulsing high noise band — distant summer cicadas. */
+  private playCicada(when: number, vol: number) {
+    const ctx = this.ctx!
+    const src = ctx.createBufferSource()
+    src.buffer = this.noiseBuffer
+    src.loop = true
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.frequency.value = 5200
+    filter.Q.value = 9
+    const g = ctx.createGain()
+    const dur = 0.7 + Math.random() * 0.9
+    g.gain.setValueAtTime(0, when)
+    g.gain.linearRampToValueAtTime(vol, when + 0.15)
+    g.gain.setTargetAtTime(0, when + dur, 0.12)
+    // Tremolo: the churring pulse.
+    const lfo = ctx.createOscillator()
+    lfo.frequency.value = 19 + Math.random() * 8
+    const lfoGain = ctx.createGain()
+    lfoGain.gain.value = vol * 0.5
+    lfo.connect(lfoGain)
+    lfoGain.connect(g.gain)
+    src.connect(filter)
+    filter.connect(g)
+    g.connect(this.dryGain!)
+    src.start(when)
+    src.stop(when + dur + 0.6)
+    lfo.start(when)
+    lfo.stop(when + dur + 0.6)
+  }
+
+  /** Descending "kana-kana" glides — the evening higurashi cicada. */
+  private playHigurashi(when: number, vol: number) {
+    const ctx = this.ctx!
+    let start = when
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(3800 - i * 180, start)
+      osc.frequency.exponentialRampToValueAtTime(3100 - i * 180, start + 0.32)
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, start)
+      g.gain.linearRampToValueAtTime(vol, start + 0.04)
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.38)
+      osc.connect(g)
+      g.connect(this.dryGain!)
+      g.connect(this.wetSend!)
+      osc.start(start)
+      osc.stop(start + 0.42)
+      start += 0.42
+    }
+  }
+
+  /** Triplet pulses of a high sine — crickets after dark. */
+  private playCrickets(when: number, vol: number) {
+    const ctx = this.ctx!
+    let start = when + 0.02
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.value = 4100 + Math.random() * 250
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, start)
+      g.gain.linearRampToValueAtTime(vol, start + 0.008)
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.045)
+      osc.connect(g)
+      g.connect(this.dryGain!)
+      osc.start(start)
+      osc.stop(start + 0.06)
+      start += 0.07
+    }
+  }
+
+  /** Pneumatic hiss + clunk of the doors; `open` alters the envelope slightly. */
+  playDoorCycle(open: boolean) {
+    if (!this.ctx) return
+    const ctx = this.ctx
+    const t = ctx.currentTime + 0.02
+    const hiss = ctx.createBufferSource()
+    hiss.buffer = this.noiseBuffer
+    const hp = ctx.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = 1400
+    const hg = ctx.createGain()
+    const hissDur = open ? 0.45 : 0.6
+    hg.gain.setValueAtTime(0, t)
+    hg.gain.linearRampToValueAtTime(0.07, t + 0.05)
+    hg.gain.exponentialRampToValueAtTime(0.0001, t + hissDur)
+    hiss.connect(hp)
+    hp.connect(hg)
+    hg.connect(this.dryGain!)
+    hg.connect(this.wetSend!)
+    hiss.start(t)
+    hiss.stop(t + hissDur + 0.1)
+
+    const clunkAt = (when: number, vol: number) => {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(110, when)
+      osc.frequency.exponentialRampToValueAtTime(65, when + 0.07)
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, when)
+      g.gain.linearRampToValueAtTime(vol, when + 0.006)
+      g.gain.exponentialRampToValueAtTime(0.0001, when + 0.11)
+      osc.connect(g)
+      g.connect(this.dryGain!)
+      g.connect(this.wetSend!)
+      osc.start(when)
+      osc.stop(when + 0.14)
+    }
+    if (open) clunkAt(t + hissDur - 0.04, 0.11)
+    else {
+      clunkAt(t + hissDur - 0.05, 0.1)
+      clunkAt(t + hissDur + 0.04, 0.13)
+    }
+  }
+
+  /** Boarding bustle while the doors are open: vocal-band murmur + scattered footsteps, scaled by the rush-hour curve. */
+  private updateCrowd(t: number, hour: number, crowd: number, duckMul: number) {
+    const ctx = this.ctx!
+    if (!this.crowdGain) {
+      const src = ctx.createBufferSource()
+      src.buffer = this.noiseBuffer
+      src.loop = true
+      const bp = ctx.createBiquadFilter()
+      bp.type = 'bandpass'
+      bp.frequency.value = 620
+      bp.Q.value = 0.9
+      this.crowdGain = ctx.createGain()
+      this.crowdGain.gain.value = 0
+      src.connect(bp)
+      bp.connect(this.crowdGain)
+      this.crowdGain.connect(this.dryGain!)
+      this.crowdGain.connect(this.wetSend!)
+      src.start()
+    }
+    const proximity = (center: number, width: number) => Math.max(0, 1 - Math.abs(((hour - center + 36) % 24) - 12) / width)
+    const rush = Math.max(proximity(8, 2.5), proximity(18, 2.5))
+    const level = crowd * (0.35 + 0.65 * rush)
+    this.crowdGain.gain.setTargetAtTime(level * 0.045 * duckMul, t, 0.3)
+
+    if (level > 0.15 && t >= this.footstepNextAt) {
+      this.footstepNextAt = t + 0.12 + Math.random() * 0.35 / Math.max(level, 0.25)
+      const src = ctx.createBufferSource()
+      src.buffer = this.noiseBuffer
+      src.playbackRate.value = 0.5 + Math.random() * 0.3
+      const lp = ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.value = 260 + Math.random() * 140
+      const g = ctx.createGain()
+      const vol = (0.02 + Math.random() * 0.025) * level * duckMul
+      g.gain.setValueAtTime(0, t)
+      g.gain.linearRampToValueAtTime(vol, t + 0.008)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07)
+      const pan = ctx.createStereoPanner()
+      pan.pan.value = (Math.random() - 0.5) * 1.2
+      src.connect(lp)
+      lp.connect(g)
+      g.connect(pan)
+      pan.connect(this.dryGain!)
+      src.start(t)
+      src.stop(t + 0.1)
+    }
   }
 
   /** Ducks the motor/rail/room-tone bed for `seconds` so melodies and announcements read clearly. */
@@ -462,12 +738,63 @@ export class AudioEngine {
     return this.announcing
   }
 
+  /**
+   * PA "speaker" dressing: the Web Speech API renders outside the Web Audio
+   * graph, so true reverb on the voice itself is impossible — instead a soft
+   * speaker-band hiss opens with a keying click and stays under the whole
+   * announcement, which reads as "coming through the train's PA".
+   */
+  private startPaBed() {
+    const ctx = this.ctx!
+    if (this.paBedGain) return
+    const src = ctx.createBufferSource()
+    src.buffer = this.noiseBuffer
+    src.loop = true
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = 1500
+    bp.Q.value = 0.35
+    this.paBedGain = ctx.createGain()
+    const t = ctx.currentTime
+    this.paBedGain.gain.setValueAtTime(0, t)
+    this.paBedGain.gain.linearRampToValueAtTime(0.011, t + 0.25)
+    src.connect(bp)
+    bp.connect(this.paBedGain)
+    this.paBedGain.connect(this.dryGain!)
+    this.paBedGain.connect(this.wetSend!)
+    src.start()
+    this.paBedSource = src
+    // Keying click.
+    const osc = ctx.createOscillator()
+    osc.type = 'square'
+    osc.frequency.value = 820
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0, t)
+    g.gain.linearRampToValueAtTime(0.035, t + 0.004)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03)
+    osc.connect(g)
+    g.connect(this.dryGain!)
+    osc.start(t)
+    osc.stop(t + 0.05)
+  }
+
+  private stopPaBed() {
+    if (!this.ctx || !this.paBedGain) return
+    const t = this.ctx.currentTime
+    this.paBedGain.gain.setTargetAtTime(0, t, 0.18)
+    const src = this.paBedSource
+    window.setTimeout(() => src?.stop(), 900)
+    this.paBedGain = null
+    this.paBedSource = null
+  }
+
   private playAnnouncement(item: QueuedAnnouncement) {
     this.announcing = true
     const totalChars = item.segments.reduce((n, s) => n + s.text.length, 0)
     const fanfareDuration = item.fanfare ? this.playMelody(RETRO_FANFARE, 'retro', 0.4) || 0.8 : 0
     this.duckFor(3.5 + totalChars * 0.06 + fanfareDuration)
     const chimeDuration = this.playMelody(ATTENTION_CHIME, 'attention', 0.32) || 0.3
+    this.startPaBed()
 
     window.setTimeout(() => {
       // Clear only leftovers (e.g. the unlock primer) — by construction
@@ -498,6 +825,7 @@ export class AudioEngine {
 
   /** Breathing gap after an announcement, then the next queued one (if any) takes the mic. */
   private finishAnnouncement() {
+    this.stopPaBed()
     window.setTimeout(() => {
       this.announcing = false
       const next = this.announceQueue.shift()

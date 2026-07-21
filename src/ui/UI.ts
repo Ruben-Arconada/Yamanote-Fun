@@ -6,7 +6,18 @@ export interface UICallbacks {
   onStart: () => void
   onPauseToggle: (paused: boolean) => void
   onTimeScaleChange: (scale: number) => void
+  /** The player tapped a preset in the clock's time picker. */
+  onTimeSet: (hour: number) => void
 }
+
+/** Presets offered when tapping the HUD clock. */
+const TIME_PRESETS: { label: string; hour: number }[] = [
+  { label: '🌅 Amanecer', hour: 6.2 },
+  { label: '☀️ Mediodía', hour: 12.5 },
+  { label: '🌇 Atardecer', hour: 17.6 },
+  { label: '🌆 Anochecer', hour: 19 },
+  { label: '🌙 Noche', hour: 22 },
+]
 
 export class UI {
   private hud: HTMLDivElement
@@ -58,9 +69,12 @@ export class UI {
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <div class="hud-clock">
+        <button class="hud-clock" aria-label="Cambiar hora del día">
           <span class="hud-clock-time">07:30</span>
           <span class="hud-clock-phase">Mañana</span>
+        </button>
+        <div class="time-picker hidden">
+          ${TIME_PRESETS.map((p) => `<button data-hour="${p.hour}">${p.label}</button>`).join('')}
         </div>
         <div class="hud-stations">
           <div class="hud-station-now">
@@ -101,6 +115,25 @@ export class UI {
     }
 
     this.hud.querySelector('.hud-menu-btn')!.addEventListener('click', () => this.toggleMenu())
+
+    // Clock tap → time-of-day picker. Tapping a preset jumps the cycle there.
+    const picker = this.hud.querySelector('.time-picker') as HTMLDivElement
+    this.hud.querySelector('.hud-clock')!.addEventListener('click', () => picker.classList.toggle('hidden'))
+    picker.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.cb.onTimeSet(parseFloat((btn as HTMLElement).dataset.hour!))
+        picker.classList.add('hidden')
+      })
+    })
+  }
+
+  /** Paints a station's dot with its stop result; the color persists for the rest of the loop. */
+  setStationResult(idx: number, grade: StopResult['grade'] | 'missed') {
+    const dot = this.stationDots[idx]
+    if (!dot) return
+    dot.classList.remove('grade-perfect', 'grade-good', 'grade-ok', 'grade-miss')
+    const cls = grade === 'perfect' ? 'grade-perfect' : grade === 'good' ? 'grade-good' : grade === 'ok' ? 'grade-ok' : 'grade-miss'
+    dot.classList.add(cls)
   }
 
   private buildStartOverlay(): HTMLDivElement {

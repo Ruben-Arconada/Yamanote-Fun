@@ -32,6 +32,7 @@ export class Game {
   private scenery: Scenery
   private dayNight: DayNightCycle
   private headlight!: THREE.SpotLight
+  private cabLight!: THREE.PointLight
   private controls: Controls
   private ui: UI
   private clock = new THREE.Clock()
@@ -72,8 +73,14 @@ export class Game {
     this.train = new Train(this.track, {
       onDepartAnnounce: (_cur, next) => this.handleDepartAnnounce(next),
       onArrivingAnnounce: (idx) => this.handleArrivingAnnounce(idx),
-      onStopped: (idx, result) => this.ui.showStopToast(idx, result),
-      onMissed: (idx) => this.ui.showMissedToast(idx),
+      onStopped: (idx, result) => {
+        this.ui.showStopToast(idx, result)
+        this.ui.setStationResult(idx, result.grade)
+      },
+      onMissed: (idx) => {
+        this.ui.showMissedToast(idx)
+        this.ui.setStationResult(idx, 'missed')
+      },
       onDoorsOpen: (idx) => this.handleDoorsOpen(idx),
       onDoorsClose: () => this.handleDoorsClose(),
       onDoorsClosingWarning: () => this.handleDoorsClosingWarning(),
@@ -93,6 +100,7 @@ export class Game {
       onStart: () => this.start(),
       onPauseToggle: (p) => (this.paused = p),
       onTimeScaleChange: (s) => (this.timeScale = s),
+      onTimeSet: (hour) => (this.dayNight.timeOfDay = hour),
     })
 
     window.addEventListener('resize', () => this.onResize())
@@ -184,6 +192,7 @@ export class Game {
 
   private handleDoorsOpen(idx: number) {
     this.controls.syncNotch(0)
+    audio.playDoorCycle(true)
     const chimeDuration = audio.playMelody(DOOR_CHIME_OPEN, 'attention', 0.45) || 0.5
     window.setTimeout(() => {
       audio.startMelodyLoop(getStationMelody(STATIONS[idx].id), 'bell', 0.4)
@@ -206,6 +215,7 @@ export class Game {
 
   private handleDoorsClose() {
     audio.stopMelodyLoop()
+    audio.playDoorCycle(false)
     audio.playMelody(DOOR_CHIME_CLOSE, 'attention', 0.4)
   }
 
@@ -336,6 +346,12 @@ export class Game {
     const cab = new THREE.Group()
     this.camera.add(cab)
 
+    // Cab dome light: a soft warm pool over the console so the controls and
+    // pillars stay readable after dark (stronger at night, ember-low by day).
+    this.cabLight = new THREE.PointLight(0xffdfb0, 0.25, 3.2, 1.6)
+    this.cabLight.position.set(0.1, 0.35, -0.5)
+    cab.add(this.cabLight)
+
     // Tinted windshield, set behind the dashboard hardware so it reads as
     // glass between the driver and the world rather than a filter on top.
     const windshieldMat = new THREE.MeshBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0.045, depthWrite: false })
@@ -345,7 +361,8 @@ export class Game {
 
     const panelTex = makeScuffedPanelTexture('#3a3f4a')
     panelTex.repeat.set(1.5, 1.5)
-    const consoleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: panelTex, roughness: 0.55, metalness: 0.35 })
+    // Faint self-illumination so the desk never falls to pure black between lamps.
+    const consoleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: panelTex, roughness: 0.55, metalness: 0.35, emissive: 0x2a2c33, emissiveIntensity: 0.22 })
     const consoleMesh = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.5, 0.5), consoleMat)
     consoleMesh.position.set(0, -0.62, -0.85)
     consoleMesh.rotation.x = -0.25
@@ -416,6 +433,8 @@ export class Game {
 
   private updateHeadlight() {
     const night = this.dayNight.nightFactor
+    // Cab light breathes with the dark: ember by day, warm pool at night.
+    this.cabLight.intensity = 0.25 + night * 1.3
     // Fully off (and skipped by the renderer) in daylight — an intensity-0
     // spot still costs per-fragment work in every standard material.
     this.headlight.visible = night > 0.01
@@ -484,7 +503,7 @@ export class Game {
       if (this.scenery.crossingBellActive) audio.crossingTick(0.7)
     }
     this.updateHeadlight()
-    audio.updateAmbient(this.train.speed01, this.train.brakeAmount01)
+    audio.updateAmbient(this.train.speed01, this.train.brakeAmount01, this.dayNight.timeOfDay, this.train.doorsOpenAmount)
     this.controls.syncNotch(this.train.notch)
     this.updateCameraFromTrain()
     this.updateLever()

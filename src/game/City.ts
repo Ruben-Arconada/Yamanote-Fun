@@ -189,9 +189,14 @@ export class City {
   private buildPlatforms() {
     const dummy = new THREE.Object3D()
 
-    const platformMat = new THREE.MeshStandardMaterial({ color: 0xb9b3a4, roughness: 0.9, map: makePlatformTileTexture() })
+    // Station furniture splits into two looks via per-instance tints on
+    // white-based materials: RUSTIC (shitamachi/green — wooden columns,
+    // warm stone, tiled-brown canopies, timber benches) for the quieter
+    // stretches, MODERN (steel, cool navy canopies) for the big-city ones.
+    const platformMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, map: makePlatformTileTexture() })
     ;(platformMat.map as THREE.Texture).repeat.set(3, 22)
     const platformSlab = new THREE.InstancedMesh(new THREE.BoxGeometry(PLATFORM_DEPTH, 1.2, PLATFORM_LEN), platformMat, N)
+    platformSlab.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3)
     platformSlab.receiveShadow = true
 
     const safetyMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffcc00, emissiveIntensity: 0, roughness: 0.6 })
@@ -200,15 +205,18 @@ export class City {
     const tactileMat = new THREE.MeshStandardMaterial({ map: makeTactilePavingTexture(), roughness: 0.85 })
     const tactileStrip = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.06, PLATFORM_LEN - 2), tactileMat, N)
 
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0x2b3040, roughness: 0.55, metalness: 0.25 })
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.25 })
     const roof = new THREE.InstancedMesh(new THREE.BoxGeometry(ROOF_WIDTH, ROOF_THICK, PLATFORM_LEN + 2), roofMat, N)
+    roof.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3)
     roof.castShadow = true
 
-    const fasciaMat = new THREE.MeshStandardMaterial({ color: 0x1c2028, roughness: 0.5, metalness: 0.3 })
+    const fasciaMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.3 })
     const fascia = new THREE.InstancedMesh(new THREE.BoxGeometry(0.15, 0.5, PLATFORM_LEN + 2), fasciaMat, N)
+    fascia.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3)
 
-    const columnMat = new THREE.MeshStandardMaterial({ color: 0x4c5a4a, metalness: 0.35, roughness: 0.55 })
+    const columnMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.35, roughness: 0.55 })
     const columns = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, COLUMN_HEIGHT, 0.42), columnMat, N * COLUMN_ZS.length)
+    columns.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * COLUMN_ZS.length * 3), 3)
     columns.castShadow = true
     const columnBandMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, roughness: 0.6 })
     const columnBands = new THREE.InstancedMesh(new THREE.BoxGeometry(0.46, 0.35, 0.46), columnBandMat, N * COLUMN_ZS.length)
@@ -225,8 +233,9 @@ export class City {
     const rodMat = new THREE.MeshStandardMaterial({ color: 0xc9c9c9, metalness: 0.6, roughness: 0.4 })
     const signRods = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.035, 0.035, Math.max(ROD_LEN, 0.15), 6), rodMat, N * 2)
 
-    const benchMat = new THREE.MeshStandardMaterial({ color: 0x2f6b46, roughness: 0.7 })
+    const benchMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 })
     const bench = new THREE.InstancedMesh(new THREE.BoxGeometry(0.7, 0.9, 2.4), benchMat, N)
+    bench.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3)
     const vendingMat = new THREE.MeshStandardMaterial({ color: 0xd7dde3, emissive: 0x6fb8ff, emissiveIntensity: 0.15, roughness: 0.4, metalness: 0.2 })
     const vending = new THREE.InstancedMesh(new THREE.BoxGeometry(0.9, 1.9, 1.3), vendingMat, N)
     this.vendingMat = vendingMat
@@ -253,11 +262,27 @@ export class City {
       mesh.setMatrixAt(index, dummy.matrix)
     }
 
+    // Two furniture palettes; every tinted pool reads its station's style here.
+    const STYLE = {
+      rustic: { slab: 0xcbb896, roof: 0x5a4332, fascia: 0x3d2f24, column: 0x7a5b3a, bench: 0x8a6a42 },
+      modern: { slab: 0xb9b3a4, roof: 0x2b3040, fascia: 0x1c2028, column: 0x4c5a4a, bench: 0x2f6b46 },
+    }
+    const tint = new THREE.Color()
+
     for (let s = 0; s < N; s++) {
       const station = STATIONS[s]
       const marker = this.track.markerFor(s)
       const point = this.track.pointAt(marker.tFraction)
       const tangent = this.track.tangentAt(marker.tFraction)
+
+      const style = station.theme.district === 'shitamachi' || station.theme.district === 'green' ? STYLE.rustic : STYLE.modern
+      platformSlab.setColorAt(s, tint.setHex(style.slab))
+      roof.setColorAt(s, tint.setHex(style.roof))
+      fascia.setColorAt(s, tint.setHex(style.fascia))
+      bench.setColorAt(s, tint.setHex(style.bench))
+      for (let c = 0; c < COLUMN_ZS.length; c++) {
+        columns.setColorAt(s * COLUMN_ZS.length + c, tint.setHex(style.column))
+      }
 
       const group = new THREE.Group()
       group.position.copy(point)
@@ -335,6 +360,7 @@ export class City {
 
     for (const mesh of instancedPools) {
       mesh.instanceMatrix.needsUpdate = true
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
       this.scene.add(mesh)
     }
     this.lampMaterials.push(lampMat)
