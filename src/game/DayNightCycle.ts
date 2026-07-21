@@ -106,6 +106,8 @@ export class DayNightCycle {
   readonly moonSprite: THREE.Sprite
   readonly stars: THREE.Points
   private starsMaterial: THREE.PointsMaterial
+  private starsBright!: THREE.Points
+  private starsBrightMaterial!: THREE.PointsMaterial
   private scene: THREE.Scene
   private sunDistance = 2000
   /** Keyframe blend for the current frame — computed once per update() so per-frame getters allocate nothing. */
@@ -165,29 +167,38 @@ export class DayNightCycle {
     this.moonSprite.scale.setScalar(110)
     scene.add(this.moonSprite)
 
-    const starGeo = new THREE.BufferGeometry()
-    const STAR_COUNT = 1200
-    const positions = new Float32Array(STAR_COUNT * 3)
-    for (let i = 0; i < STAR_COUNT; i++) {
-      const r = 1800 + Math.random() * 1500
-      const theta = Math.random() * Math.PI * 2
-      const phi = Math.acos(THREE.MathUtils.lerp(0.05, 0.95, Math.random()))
-      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta)
-      positions[i * 3 + 1] = Math.abs(r * Math.cos(phi)) + 100
-      positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta)
+    // Two layers: a dense field of fine stars plus a sparse handful of
+    // brighter ones — reads as a real night sky instead of oversized dots.
+    const makeStarLayer = (count: number, size: number) => {
+      const geo = new THREE.BufferGeometry()
+      const positions = new Float32Array(count * 3)
+      for (let i = 0; i < count; i++) {
+        const r = 1800 + Math.random() * 1500
+        const theta = Math.random() * Math.PI * 2
+        const phi = Math.acos(THREE.MathUtils.lerp(0.05, 0.95, Math.random()))
+        positions[i * 3] = r * Math.sin(phi) * Math.cos(theta)
+        positions[i * 3 + 1] = Math.abs(r * Math.cos(phi)) + 100
+        positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta)
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+      const mat = new THREE.PointsMaterial({
+        color: 0xffffff,
+        // sizeAttenuation:false works in PHYSICAL pixels — scale by the same
+        // DPR cap the renderer uses, or fine stars vanish on mobile screens.
+        size: size * Math.min(window.devicePixelRatio, 2),
+        sizeAttenuation: false,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        fog: false,
+      })
+      return new THREE.Points(geo, mat)
     }
-    starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    this.starsMaterial = new THREE.PointsMaterial({
-      color: 0xffffff,
-      size: 3.2,
-      sizeAttenuation: false,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      fog: false,
-    })
-    this.stars = new THREE.Points(starGeo, this.starsMaterial)
-    scene.add(this.stars)
+    this.stars = makeStarLayer(2600, 1.5)
+    this.starsMaterial = this.stars.material as THREE.PointsMaterial
+    this.starsBright = makeStarLayer(420, 2.4)
+    this.starsBrightMaterial = this.starsBright.material as THREE.PointsMaterial
+    scene.add(this.stars, this.starsBright)
 
     scene.fog = new THREE.Fog(0xcfe8ff, 200, 1500)
   }
@@ -275,8 +286,10 @@ export class DayNightCycle {
     const moonMat = this.moonSprite.material as THREE.SpriteMaterial
     moonMat.opacity = THREE.MathUtils.clamp((-elevationDeg + 8) / 14, 0, 1) * 0.9
 
-    this.starsMaterial.opacity = this.nightFactor * 0.85
+    this.starsMaterial.opacity = this.nightFactor * 0.75
+    this.starsBrightMaterial.opacity = this.nightFactor * 0.95
     this.stars.position.copy(focusPoint)
+    this.starsBright.position.copy(focusPoint)
     // Sky dome follows the cab so its gradient (and margins against distant
     // landmarks) stay consistent all around the enlarged loop.
     this.skyMesh.position.copy(focusPoint)

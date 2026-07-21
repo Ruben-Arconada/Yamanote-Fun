@@ -10,7 +10,7 @@ import { Controls } from '../ui/Controls'
 import { UI } from '../ui/UI'
 import { STATIONS } from '../data/stations'
 import { getStationMelody, DOOR_CHIME_OPEN, DOOR_CHIME_CLOSE } from '../data/melodies'
-import { makeBallastTexture, makeScuffedPanelTexture, makeDestinationTexture, makeGroundTexture } from './signage'
+import { makeBallastTexture, makeScuffedPanelTexture, makeDestinationTexture, makeGroundTexture, WINDOW_DUSK_UNIFORM } from './signage'
 
 const LOOK_YAW_LIMIT = 1.7 // ~97°, enough to look out the side windows
 const LOOK_PITCH_LIMIT = 0.55
@@ -528,6 +528,9 @@ export class Game {
 
   private step(dt: number) {
     this.dayNight.update(dt * this.timeScale, this.camera.position)
+    // Every window-lit material shares this: windows pop on one by one
+    // through dusk as it rises from 0 to 1.
+    WINDOW_DUSK_UNIFORM.value = this.dayNight.nightFactor
     this.train.update(dt)
     this.city.update(dt, this.dayNight.nightFactor, this.train.targetStationIndex, this.dayNight.timeOfDay)
     this.scenery.update(dt, this.dayNight, this.train.progressFraction)
@@ -537,7 +540,26 @@ export class Game {
       if (this.scenery.crossingBellActive) audio.crossingTick(0.7)
     }
     this.updateHeadlight()
-    audio.updateAmbient(this.train.speed01, this.train.brakeAmount01, this.dayNight.timeOfDay, this.train.doorsOpenAmount)
+    // Positional platform murmur: nearest station (ahead or just passed)
+    // wins; louder for landmark hubs, panned toward the platform side.
+    const distAhead = this.train.distanceToTarget
+    const prevMarker = this.track.markerFor(this.train.currentStationIndex)
+    const distBehind = (((this.train.progressFraction - prevMarker.tFraction) % 1) + 1) % 1 * this.track.getLength()
+    // Unrolled (no per-frame array allocation, per Marco's rule).
+    let murmurLevel = 0
+    let murmurPan = 0
+    const ahead = this.train.targetStation
+    const behind = this.train.currentStation
+    const levelAhead = Math.max(0, 1 - Math.min(distAhead / 180, 1)) * (ahead.landmark ? 1 : 0.55)
+    const levelBehind = Math.max(0, 1 - Math.min(distBehind / 180, 1)) * (behind.landmark ? 1 : 0.55)
+    if (levelAhead >= levelBehind && levelAhead > 0) {
+      murmurLevel = levelAhead
+      murmurPan = ahead.doorSide === 'left' ? -0.55 : 0.55
+    } else if (levelBehind > 0) {
+      murmurLevel = levelBehind
+      murmurPan = behind.doorSide === 'left' ? -0.55 : 0.55
+    }
+    audio.updateAmbient(this.train.speed01, this.train.brakeAmount01, this.dayNight.timeOfDay, this.train.doorsOpenAmount, murmurLevel, murmurPan)
     this.controls.syncNotch(this.train.notch)
     this.updateCameraFromTrain()
     this.updateLever()

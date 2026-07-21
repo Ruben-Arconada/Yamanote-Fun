@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Track } from './Track'
 import { STATIONS, prevStationIndex, nextStationIndex } from '../data/stations'
-import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture } from './signage'
+import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture, applyProgressiveWindows } from './signage'
 
 const THEME_GROUPS = ['business', 'downtown', 'shitamachi', 'green', 'youth', 'bay'] as const
 const N = STATIONS.length
@@ -79,6 +79,8 @@ export class City {
   private nightGlowMaterials: THREE.MeshStandardMaterial[] = []
   private lampMaterials: THREE.MeshStandardMaterial[] = []
   private vendingMat!: THREE.MeshStandardMaterial
+  private lanternMat!: THREE.MeshStandardMaterial
+  private ledStripMat!: THREE.MeshStandardMaterial
   private signEntries: SignEntry[] = []
   private passengerMesh!: THREE.InstancedMesh
   private passengerHeadMesh!: THREE.InstancedMesh
@@ -102,14 +104,14 @@ export class City {
     // light in the youth/downtown nightlife districts.
     // Facade tones are kept fairly light because they multiply against each
     // theme's buildingColor — darker values here made every district read as
-    // near-black in daylight.
+    // near-black in daylight. Denser grids = smaller windows = truer scale.
     const windowStyles: Record<(typeof THEME_GROUPS)[number], ReturnType<typeof makeWindowGridTexture>> = {
-      business: makeWindowGridTexture(9, 14, { glass: '#6d7c92', facade: '#9aa4b2', litChance: 0.42, litColors: ['#eef3ff', '#dce8ff', '#fff6da'] }),
-      downtown: makeWindowGridTexture(6, 10, { glass: '#707684', facade: '#a09aa8', litChance: 0.5, litColors: ['#fff6da', '#ffe9b0', '#ffd2f0', '#c8f4ff'] }),
-      shitamachi: makeWindowGridTexture(4, 7, { glass: '#7a6f60', facade: '#a89c8c', litChance: 0.55, litColors: ['#ffdf9e', '#ffe9b0', '#fff6da'] }),
-      green: makeWindowGridTexture(4, 6, { glass: '#6f7c6c', facade: '#9aa694', litChance: 0.4, litColors: ['#ffe9b0', '#fff6da'] }),
-      youth: makeWindowGridTexture(5, 9, { glass: '#7a7090', facade: '#a49cb4', litChance: 0.52, litColors: ['#fff6da', '#ffb8e2', '#a5e8ff', '#ffe9b0'] }),
-      bay: makeWindowGridTexture(8, 13, { glass: '#6c7e8e', facade: '#98a8b6', litChance: 0.4, litColors: ['#e2f0ff', '#fff6da', '#d0e6ff'] }),
+      business: makeWindowGridTexture(12, 20, { glass: '#6d7c92', facade: '#9aa4b2', litChance: 0.42, litColors: ['#eef3ff', '#dce8ff', '#fff6da'] }),
+      downtown: makeWindowGridTexture(9, 15, { glass: '#707684', facade: '#a09aa8', litChance: 0.5, litColors: ['#fff6da', '#ffe9b0', '#ffd2f0', '#c8f4ff'] }),
+      shitamachi: makeWindowGridTexture(6, 10, { glass: '#7a6f60', facade: '#a89c8c', litChance: 0.55, litColors: ['#ffdf9e', '#ffe9b0', '#fff6da'] }),
+      green: makeWindowGridTexture(6, 9, { glass: '#6f7c6c', facade: '#9aa694', litChance: 0.4, litColors: ['#ffe9b0', '#fff6da'] }),
+      youth: makeWindowGridTexture(8, 13, { glass: '#7a7090', facade: '#a49cb4', litChance: 0.52, litColors: ['#fff6da', '#ffb8e2', '#a5e8ff', '#ffe9b0'] }),
+      bay: makeWindowGridTexture(11, 18, { glass: '#6c7e8e', facade: '#98a8b6', litChance: 0.4, litColors: ['#e2f0ff', '#fff6da', '#d0e6ff'] }),
     }
 
     for (const theme of THEME_GROUPS) {
@@ -122,8 +124,9 @@ export class City {
         metalness: 0.05,
         emissive: 0xffffff,
         emissiveMap: windowTex.emissiveMap,
-        emissiveIntensity: 0,
+        emissiveIntensity: 1.25,
       })
+      applyProgressiveWindows(material)
       const instanced = new THREE.InstancedMesh(geo, material, perTheme)
       instanced.castShadow = true
       instanced.receiveShadow = true
@@ -195,6 +198,8 @@ export class City {
     // stretches, MODERN (steel, cool navy canopies) for the big-city ones.
     const platformMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, map: makePlatformTileTexture() })
     ;(platformMat.map as THREE.Texture).repeat.set(3, 22)
+    // Cheap sharpness at grazing angles — the platform floor is always seen nearly edge-on from the cab.
+    ;(platformMat.map as THREE.Texture).anisotropy = 8
     const platformSlab = new THREE.InstancedMesh(new THREE.BoxGeometry(PLATFORM_DEPTH, 1.2, PLATFORM_LEN), platformMat, N)
     platformSlab.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3)
     platformSlab.receiveShadow = true
@@ -246,10 +251,48 @@ export class City {
     const mapBoardMat = new THREE.MeshStandardMaterial({ color: 0xeceadf, roughness: 0.7 })
     const mapBoard = new THREE.InstancedMesh(new THREE.BoxGeometry(0.08, 1.1, 1.6), mapBoardMat, N)
 
+    // ——— Per-style character props ———
+    // Rustic: a gabled ridge riding the flat canopy (so roofs stop being
+    // slabs) + paper-lantern posts with a warm night glow.
+    const rusticCount = STATIONS.filter((s) => s.theme.district === 'shitamachi' || s.theme.district === 'green').length
+    const ridgeGeo = (() => {
+      const g = new THREE.BufferGeometry()
+      const hw = ROOF_WIDTH / 2 + 0.3
+      const ridgeH = 1.7
+      const L = (PLATFORM_LEN + 2) / 2
+      const verts = new Float32Array([
+        -hw, 0, L, hw, 0, L, 0, ridgeH, L,
+        hw, 0, -L, -hw, 0, -L, 0, ridgeH, -L,
+        -hw, 0, L, 0, ridgeH, L, 0, ridgeH, -L, -hw, 0, L, 0, ridgeH, -L, -hw, 0, -L,
+        hw, 0, L, hw, 0, -L, 0, ridgeH, -L, hw, 0, L, 0, ridgeH, -L, 0, ridgeH, L,
+      ])
+      g.setAttribute('position', new THREE.BufferAttribute(verts, 3))
+      g.computeVertexNormals()
+      return g
+    })()
+    const ridgeMat = new THREE.MeshStandardMaterial({ color: 0x6b4f3a, roughness: 0.85 })
+    const ridges = new THREE.InstancedMesh(ridgeGeo, ridgeMat, rusticCount)
+    ridges.castShadow = true
+    const lanternPostMat = new THREE.MeshStandardMaterial({ color: 0x3d2f24, roughness: 0.8 })
+    const lanternPosts = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.06, 2.1, 6), lanternPostMat, rusticCount * 2)
+    this.lanternMat = new THREE.MeshStandardMaterial({ color: 0xfff1d8, emissive: 0xffb64a, emissiveIntensity: 0, roughness: 0.6 })
+    const lanterns = new THREE.InstancedMesh(new THREE.SphereGeometry(0.19, 8, 8), this.lanternMat, rusticCount * 2)
+
+    // Modern: frosted-glass windbreak panels near the boarding edge and a
+    // cool LED strip under the canopy lip.
+    const modernCount = N - rusticCount
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0xcfe2ee, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.38, depthWrite: false })
+    const windbreaks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.08, 1.5, 7), glassMat, modernCount * 2)
+    this.ledStripMat = new THREE.MeshStandardMaterial({ color: 0xdff2ff, emissive: 0xbfe8ff, emissiveIntensity: 0.1, roughness: 0.5 })
+    const ledStrips = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 0.06, PLATFORM_LEN - 6), this.ledStripMat, modernCount)
+
     const instancedPools: THREE.InstancedMesh[] = [
       platformSlab, safetyStrip, tactileStrip, roof, fascia, columns, columnBands, struts,
       lampBody, lampHousing, signFrame, signRods, bench, vending, clockPole, clockFace, mapBoard,
+      ridges, lanternPosts, lanterns, windbreaks, ledStrips,
     ]
+    let rusticIdx = 0
+    let modernIdx = 0
 
     const put = (mesh: THREE.InstancedMesh, index: number, group: THREE.Group, local: THREE.Vector3, yRot = 0, xRot = 0, zRot = 0) => {
       dummy.position.copy(local).applyMatrix4(group.matrixWorld)
@@ -290,9 +333,10 @@ export class City {
       group.updateMatrixWorld(true)
       this.scene.add(group)
 
-      // side = +1 puts the platform on local +X, -1 on local -X — matching
-      // the station's announced door side so the visuals agree with the PA.
-      const side = station.doorSide === 'left' ? -1 : 1
+      // The group's local +X axis points to the driver's LEFT (lookAt builds
+      // X = up × forward), so 'left' means +X here. Getting this sign wrong
+      // put every platform opposite the announced door side.
+      const side = station.doorSide === 'left' ? 1 : -1
       const sx = (x: number) => side * x
       const faceTrackYRot = -side * (Math.PI / 2)
 
@@ -320,6 +364,25 @@ export class City {
         const idx = s * 2 + i
         put(signRods, idx, group, new THREE.Vector3(sx(PLATFORM_INNER + 1.2), ROD_Y, 10 + rodSide * (FRAME_W / 2 - 0.15)))
       })
+
+      const isRustic = station.theme.district === 'shitamachi' || station.theme.district === 'green'
+      if (isRustic) {
+        put(ridges, rusticIdx, group, new THREE.Vector3(sx(ROOF_MID), ROOF_Y + ROOF_THICK / 2, 0))
+        for (let li = 0; li < 2; li++) {
+          const idx = rusticIdx * 2 + li
+          const lz = li === 0 ? -24 : 24
+          put(lanternPosts, idx, group, new THREE.Vector3(sx(PLATFORM_INNER + 2.2), PLATFORM_TOP + 1.05, lz))
+          put(lanterns, idx, group, new THREE.Vector3(sx(PLATFORM_INNER + 2.2), PLATFORM_TOP + 2.25, lz))
+        }
+        rusticIdx++
+      } else {
+        for (let wi = 0; wi < 2; wi++) {
+          const idx = modernIdx * 2 + wi
+          put(windbreaks, idx, group, new THREE.Vector3(sx(PLATFORM_INNER + 1.8), PLATFORM_TOP + 0.75, wi === 0 ? -14 : 16))
+        }
+        put(ledStrips, modernIdx, group, new THREE.Vector3(sx(ROOF_INNER + 0.4), COLUMN_TOP - 0.32, 0))
+        modernIdx++
+      }
 
       put(bench, s, group, new THREE.Vector3(sx(PLATFORM_MID - 1.5), PLATFORM_TOP + 0.45, -20))
       put(vending, s, group, new THREE.Vector3(sx(PLATFORM_OUTER - 1.2), PLATFORM_TOP + 0.95, -8))
@@ -538,7 +601,8 @@ export class City {
 
     for (let s = 0; s < N; s++) {
       const station = STATIONS[s]
-      const side = station.doorSide === 'left' ? -1 : 1
+      // Same convention as the platforms: local +X = driver's left.
+      const side = station.doorSide === 'left' ? 1 : -1
       const marker = this.track.markerFor(s)
       const point = this.track.pointAt(marker.tFraction)
       const tangent = this.track.tangentAt(marker.tFraction)
@@ -591,9 +655,8 @@ export class City {
 
   update(dt: number, nightFactor: number, targetStationIndex: number, timeOfDay: number) {
     this.time += dt
-    for (const group of this.themeGroups.values()) {
-      group.material.emissiveIntensity = nightFactor * 1.3
-    }
+    // Building windows switch on per-window via the progressive shader
+    // (WINDOW_DUSK_UNIFORM, driven by Game) — no per-material fade here.
     for (const mat of this.videoScreenMaterials) {
       mat.uniforms.uTime.value = this.time
     }
@@ -602,6 +665,9 @@ export class City {
     }
     // Vending machines hum with light around the clock, brighter after dark.
     this.vendingMat.emissiveIntensity = 0.15 + nightFactor * 0.75
+    // Paper lanterns warm up with the night; LED strips stay coolly lit.
+    this.lanternMat.emissiveIntensity = nightFactor * 1.8
+    this.ledStripMat.emissiveIntensity = 0.1 + nightFactor * 1.4
     for (const mat of this.nightGlowMaterials) {
       mat.emissiveIntensity = nightFactor * 0.9
     }

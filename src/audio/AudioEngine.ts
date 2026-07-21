@@ -95,6 +95,8 @@ export class AudioEngine {
   private paBedSource: AudioBufferSourceNode | null = null
   private crowdGain: GainNode | null = null
   private footstepNextAt = 0
+  private stationMurmurGain: GainNode | null = null
+  private stationMurmurPanner: StereoPannerNode | null = null
 
   get ready() {
     return this.ctx !== null
@@ -286,7 +288,7 @@ export class AudioEngine {
    * hour: game time of day, drives the nature/city soundscape. crowd: 0..1
    * how much boarding bustle to play (doors-open amount).
    */
-  updateAmbient(speed01: number, brakeAmount: number, hour = 12, crowd = 0) {
+  updateAmbient(speed01: number, brakeAmount: number, hour = 12, crowd = 0, stationMurmur = 0, stationPan = 0) {
     if (!this.ctx) return
     const t = this.ctx.currentTime
     const dt = Math.min(Math.max(t - this.lastAmbientAt, 0), 0.1)
@@ -315,6 +317,43 @@ export class AudioEngine {
     this.updateRailJoints(dt, speed01, duckMul)
     this.updateTimeAmbience(t, hour, speed01, duckMul)
     this.updateCrowd(t, hour, crowd, duckMul)
+    this.updateStationMurmur(t, hour, stationMurmur, stationPan, duckMul)
+  }
+
+  /**
+   * Positional platform murmur: swells as the cab nears a station, panned
+   * toward the platform side, and scaled by how busy that station is (the
+   * caller folds in landmark status; the rush-hour curve is applied here).
+   */
+  private updateStationMurmur(t: number, hour: number, level: number, pan: number, duckMul: number) {
+    const ctx = this.ctx!
+    if (!this.stationMurmurGain) {
+      const src = ctx.createBufferSource()
+      src.buffer = this.noiseBuffer
+      src.loop = true
+      const bp = ctx.createBiquadFilter()
+      bp.type = 'bandpass'
+      bp.frequency.value = 540
+      bp.Q.value = 0.7
+      this.stationMurmurGain = ctx.createGain()
+      this.stationMurmurGain.gain.value = 0
+      this.stationMurmurPanner = ctx.createStereoPanner()
+      src.connect(bp)
+      bp.connect(this.stationMurmurGain)
+      this.stationMurmurGain.connect(this.stationMurmurPanner)
+      this.stationMurmurPanner.connect(this.dryGain!)
+      this.stationMurmurPanner.connect(this.wetSend!)
+      src.start()
+    }
+    const rush = this.rushFactor(hour)
+    this.stationMurmurGain.gain.setTargetAtTime(level * (0.35 + 0.65 * rush) * 0.05 * duckMul, t, 0.35)
+    this.stationMurmurPanner!.pan.setTargetAtTime(pan, t, 0.3)
+  }
+
+  /** Rough crowd curve — peaks at the morning/evening rush, quiet overnight. */
+  private rushFactor(hour: number): number {
+    const proximity = (center: number, width: number) => Math.max(0, 1 - Math.abs(((hour - center + 36) % 24) - 12) / width)
+    return Math.max(proximity(8, 2.5), proximity(18, 2.5))
   }
 
   /** The da-dum of rail joints: paired soft clacks whose cadence tracks speed. */
@@ -536,9 +575,7 @@ export class AudioEngine {
       this.crowdGain.connect(this.wetSend!)
       src.start()
     }
-    const proximity = (center: number, width: number) => Math.max(0, 1 - Math.abs(((hour - center + 36) % 24) - 12) / width)
-    const rush = Math.max(proximity(8, 2.5), proximity(18, 2.5))
-    const level = crowd * (0.35 + 0.65 * rush)
+    const level = crowd * (0.35 + 0.65 * this.rushFactor(hour))
     this.crowdGain.gain.setTargetAtTime(level * 0.045 * duckMul, t, 0.3)
 
     if (level > 0.15 && t >= this.footstepNextAt) {

@@ -269,8 +269,10 @@ export function makeWindowGridTexture(cols: number, rows: number, opts: WindowGr
 
   ctx.fillStyle = facade
   ctx.fillRect(0, 0, size, size)
-  emCtx.fillStyle = '#000000'
-  emCtx.fillRect(0, 0, size, size)
+  // The emissive canvas stays TRANSPARENT: each lit window is drawn with a
+  // random alpha that acts as its personal "switch-on threshold" — the
+  // progressive-windows shader lights a window once dusk passes its alpha.
+  emCtx.clearRect(0, 0, size, size)
 
   const stepX = size / cols
   const stepY = size / rows
@@ -283,7 +285,12 @@ export function makeWindowGridTexture(cols: number, rows: number, opts: WindowGr
       ctx.fillStyle = glass
       ctx.fillRect(x, y, w, h)
       if (Math.random() < litChance) {
-        emCtx.fillStyle = litColors[Math.floor(Math.random() * litColors.length)]
+        const hex = litColors[Math.floor(Math.random() * litColors.length)]
+        const rr = parseInt(hex.slice(1, 3), 16)
+        const gg = parseInt(hex.slice(3, 5), 16)
+        const bb = parseInt(hex.slice(5, 7), 16)
+        const key = 0.08 + Math.random() * 0.9
+        emCtx.fillStyle = `rgba(${rr},${gg},${bb},${key.toFixed(3)})`
         emCtx.fillRect(x, y, w, h)
       }
     }
@@ -292,7 +299,41 @@ export function makeWindowGridTexture(cols: number, rows: number, opts: WindowGr
   map.colorSpace = THREE.SRGBColorSpace
   const emissiveMap = new THREE.CanvasTexture(emCanvas)
   emissiveMap.colorSpace = THREE.SRGBColorSpace
+  // No mipmaps on the threshold-alpha map: averaging alpha against the
+  // transparent background would make distant facades switch on in blocks
+  // (and shift with LOD) instead of window by window.
+  emissiveMap.generateMipmaps = false
+  emissiveMap.minFilter = THREE.LinearFilter
   return { map, emissiveMap }
+}
+
+/**
+ * Shared dusk progress for every window-lit material: 0 = broad daylight
+ * (all windows dark), 1 = deep night (all lit). Driven once per frame from
+ * the day/night cycle.
+ */
+export const WINDOW_DUSK_UNIFORM = { value: 0 }
+
+/**
+ * Patches a MeshStandardMaterial so each emissive-map window switches on
+ * individually when dusk passes the window's baked alpha threshold —
+ * instead of the whole facade fading in at once. One uniform shared by all
+ * patched materials; zero extra draw calls.
+ */
+export function applyProgressiveWindows(mat: THREE.MeshStandardMaterial) {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindowDusk = WINDOW_DUSK_UNIFORM
+    shader.fragmentShader = shader.fragmentShader
+      .replace('void main() {', 'uniform float uWindowDusk;\nvoid main() {')
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#ifdef USE_EMISSIVEMAP
+  vec4 emissiveColor = texture2D( emissiveMap, vEmissiveMapUv );
+  totalEmissiveRadiance *= emissiveColor.rgb * step( 1.0 - uWindowDusk, emissiveColor.a );
+#endif`,
+      )
+  }
+  mat.customProgramCacheKey = () => 'progressive-windows'
 }
 
 /** Soft radial glow disc for the sun — bright core fading out, so it reads as a glowing body instead of a hard square sprite. */

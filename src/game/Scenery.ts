@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { Track } from './Track'
 import type { DayNightCycle } from './DayNightCycle'
 import { STATIONS } from '../data/stations'
-import { makeCloudTexture, makeNeonSignTexture, makeWindowGridTexture } from './signage'
+import { makeCloudTexture, makeNeonSignTexture, makeWindowGridTexture, applyProgressiveWindows } from './signage'
 
 const N = STATIONS.length
 
@@ -191,15 +191,16 @@ export class Scenery {
     const outerCount = 170
     const innerCount = 60
     const count = outerCount + innerCount
-    const tex = makeWindowGridTexture(7, 12, { glass: '#4a5361', facade: '#565d68', litChance: 0.45 })
+    const tex = makeWindowGridTexture(10, 16, { glass: '#4a5361', facade: '#565d68', litChance: 0.45 })
     this.skylineMat = new THREE.MeshStandardMaterial({
       color: 0x8b93a0,
       map: tex.map,
       emissive: 0xffffff,
       emissiveMap: tex.emissiveMap,
-      emissiveIntensity: 0,
+      emissiveIntensity: 1.2,
       roughness: 0.85,
     })
+    applyProgressiveWindows(this.skylineMat)
     const ring = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), this.skylineMat, count)
     ring.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3)
     const dummy = new THREE.Object3D()
@@ -340,7 +341,9 @@ export class Scenery {
         const p = this.track.pointAt(t)
         const tangent = this.track.tangentAt(t)
         const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
-        const side = STATIONS[i].doorSide === 'left' ? 1 : -1
+        // `normal` here points to the driver's RIGHT, so the platform side
+        // (where the park behind the station lives) is -normal for 'left'.
+        const side = STATIONS[i].doorSide === 'left' ? -1 : 1
         const off = 17 + Math.random() * 24
         const pos = p.clone().addScaledVector(normal, side * off)
         const scale = 0.8 + Math.random() * 0.7
@@ -452,13 +455,13 @@ export class Scenery {
       const em = document.createElement('canvas')
       em.width = em.height = 64
       const emCtx = em.getContext('2d')!
-      emCtx.fillStyle = '#000'
-      emCtx.fillRect(0, 0, 64, 64)
+      emCtx.clearRect(0, 0, 64, 64)
       for (const [x, y] of [[10, 22], [38, 22]]) {
         ctx.fillStyle = '#3a3f46'
         ctx.fillRect(x, y, 16, 20)
         if (Math.random() < 0.75) {
-          emCtx.fillStyle = '#ffdf9e'
+          // Alpha = the window's personal dusk switch-on threshold.
+          emCtx.fillStyle = `rgba(255,223,158,${(0.08 + Math.random() * 0.9).toFixed(3)})`
           emCtx.fillRect(x, y, 16, 20)
         }
       }
@@ -466,6 +469,9 @@ export class Scenery {
       map.colorSpace = THREE.SRGBColorSpace
       const emissiveMap = new THREE.CanvasTexture(em)
       emissiveMap.colorSpace = THREE.SRGBColorSpace
+      // Threshold alpha must not be mip-averaged (see makeWindowGridTexture).
+      emissiveMap.generateMipmaps = false
+      emissiveMap.minFilter = THREE.LinearFilter
       return { map, emissiveMap }
     })()
 
@@ -474,9 +480,10 @@ export class Scenery {
       map: windowTex.map,
       emissive: 0xffffff,
       emissiveMap: windowTex.emissiveMap,
-      emissiveIntensity: 0,
+      emissiveIntensity: 1.1,
       roughness: 0.9,
     })
+    applyProgressiveWindows(this.houseWindowMat)
     const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), this.houseWindowMat, houseCount)
     walls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
     walls.castShadow = walls.receiveShadow = true
@@ -812,8 +819,7 @@ export class Scenery {
     for (const mat of this.neonMats) {
       mat.emissiveIntensity = THREE.MathUtils.lerp(0.08, 2.4, night)
     }
-    this.houseWindowMat.emissiveIntensity = night * 1.1
-    this.skylineMat.emissiveIntensity = night * 1.2
+    // House/skyline windows switch on per-window via the progressive shader.
 
     // The fumikiri only comes alive when the train is actually bearing down
     // on it (or just past it) — light and bell gate together.
