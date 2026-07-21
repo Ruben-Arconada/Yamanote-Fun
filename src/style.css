@@ -227,6 +227,31 @@ canvas.game-canvas {
   min-width: 0;
 }
 
+/* Score chip — bottom-left, over the cab desk, out of the lever's way. */
+.score-chip {
+  position: absolute;
+  left: calc(var(--safe-left) + 12px);
+  bottom: calc(var(--safe-bottom) + 74px);
+  background: rgba(10, 12, 20, 0.65);
+  border: 1px solid rgba(143, 195, 31, 0.5);
+  border-radius: 10px;
+  padding: 4px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+.score-value {
+  font-family: ui-monospace, 'SF Mono', 'Roboto Mono', monospace;
+  font-size: 17px;
+  font-weight: 700;
+  color: #cde98a;
+  transition: transform 0.15s ease;
+}
+.score-value.bump { transform: scale(1.25); }
+.score-best { font-size: 9px; opacity: 0.6; letter-spacing: 0.06em; }
+
 .hud-bottom {
   position: absolute;
   bottom: calc(var(--safe-bottom) + 10px);

@@ -834,6 +834,27 @@ export class AudioEngine {
   }
 
   /**
+   * Background/foreground handling: when the page hides (app switch, screen
+   * lock, kiosk tab change) the render loop freezes but the Web Audio graph,
+   * speech synthesis and melody timers would keep sounding — so everything
+   * audible gets suspended, and any in-flight announcement is dropped (it
+   * would be stale by the time the player returns anyway).
+   */
+  setBackgrounded(hidden: boolean) {
+    if (!this.ctx) return
+    if (hidden) {
+      this.stopMelodyLoop()
+      this.stopPaBed()
+      this.announceQueue.length = 0
+      this.announcing = false
+      if ('speechSynthesis' in window) speechSynthesis.cancel()
+      this.ctx.suspend().catch(() => {})
+    } else {
+      this.resumeContext()
+    }
+  }
+
+  /**
    * One "kan" of a level-crossing bell — a short, bright damped strike.
    * Called by the game on each blink flip while the train nears the crossing,
    * so light and bell stay in lockstep.

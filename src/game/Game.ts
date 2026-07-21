@@ -22,6 +22,12 @@ function doorSidePhrases(side: 'left' | 'right'): { ja: string; en: string; es: 
     : { ja: '右側', en: 'right', es: 'derecho' }
 }
 
+const BEST_SCORE_KEY = 'yamanote-best-score'
+/** Arcade scoring per stop grade; perfects chain into a streak bonus. */
+const GRADE_POINTS: Record<string, number> = { perfect: 100, good: 60, ok: 30 }
+const STREAK_BONUS = 25
+const STREAK_BONUS_CAP = 200
+
 export class Game {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
@@ -46,6 +52,9 @@ export class Game {
   private lastDestinationIdx = -1
   private lastCrossingPhase = false
   private perfEl: HTMLDivElement | null = null
+  private score = 0
+  private perfectStreak = 0
+  private bestScore = Number(localStorage.getItem(BEST_SCORE_KEY) ?? 0)
 
   constructor(mount: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' })
@@ -74,10 +83,12 @@ export class Game {
       onDepartAnnounce: (_cur, next) => this.handleDepartAnnounce(next),
       onArrivingAnnounce: (idx) => this.handleArrivingAnnounce(idx),
       onStopped: (idx, result) => {
-        this.ui.showStopToast(idx, result)
+        const gained = this.applyScore(result.grade)
+        this.ui.showStopToast(idx, result, gained)
         this.ui.setStationResult(idx, result.grade)
       },
       onMissed: (idx) => {
+        this.perfectStreak = 0
         this.ui.showMissedToast(idx)
         this.ui.setStationResult(idx, 'missed')
       },
@@ -106,6 +117,11 @@ export class Game {
     window.addEventListener('resize', () => this.onResize())
     window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyP') this.togglePerfOverlay(mount)
+    })
+    // The render loop freezes on its own when the tab hides, but audio does
+    // not — silence everything in the background and pick back up on return.
+    document.addEventListener('visibilitychange', () => {
+      audio.setBackgrounded(document.hidden)
     })
     this.onResize()
     this.updateCameraFromTrain()
@@ -447,6 +463,24 @@ export class Game {
     this.headlight.target.position.copy(this.headlightPos).addScaledVector(this.headlightDir, 60).setY(y + 0.3)
     this.headlight.target.updateMatrixWorld()
     this.headlight.intensity = night * 260
+  }
+
+  /** Adds points for a stop grade (with perfect-streak bonus), persists the best, and returns what was gained. */
+  private applyScore(grade: string): number {
+    let gained = GRADE_POINTS[grade] ?? 0
+    if (grade === 'perfect') {
+      this.perfectStreak++
+      gained += Math.min((this.perfectStreak - 1) * STREAK_BONUS, STREAK_BONUS_CAP)
+    } else {
+      this.perfectStreak = 0
+    }
+    this.score += gained
+    if (this.score > this.bestScore) {
+      this.bestScore = this.score
+      localStorage.setItem(BEST_SCORE_KEY, String(this.bestScore))
+    }
+    this.ui.setScore(this.score, this.bestScore, this.perfectStreak)
+    return gained
   }
 
   private updateLever() {

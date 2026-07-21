@@ -38,6 +38,8 @@ export class UI {
   private lineDiagram!: HTMLDivElement
   private stationDots: HTMLDivElement[] = []
   private doorIndicator!: HTMLDivElement
+  private scoreValueEl!: HTMLSpanElement
+  private scoreBestEl!: HTMLElement
   private lastNotchLabel = 'N'
   private mount: HTMLElement
   private cb: UICallbacks
@@ -98,6 +100,10 @@ export class UI {
         </div>
         <div class="notch-readout">N</div>
       </div>
+      <div class="score-chip">
+        <span class="score-value">0</span>
+        <small class="score-best">MEJOR 0</small>
+      </div>
     `
     this.clockEl = this.hud.querySelector('.hud-clock-time')!
     this.phaseEl = this.hud.querySelector('.hud-clock-phase')!
@@ -108,6 +114,8 @@ export class UI {
     this.stationNowCodeEl = this.hud.querySelector('.hud-station-now-code')!
     this.stationNextCodeEl = this.hud.querySelector('.hud-station-next-code')!
     this.doorIndicator = this.hud.querySelector('.door-indicator')!
+    this.scoreValueEl = this.hud.querySelector('.score-value')!
+    this.scoreBestEl = this.hud.querySelector('.score-best')!
     this.lineDiagram = this.hud.querySelector('.line-diagram')!
 
     for (let i = 0; i < STATIONS.length; i++) {
@@ -255,7 +263,15 @@ export class UI {
     })
   }
 
-  showStopToast(stationIdx: number, result: StopResult) {
+  /** Score chip refresh; a short streak flourish appears from 2 consecutive perfects. */
+  setScore(score: number, best: number, streak: number) {
+    this.scoreValueEl.textContent = String(score)
+    this.scoreBestEl.textContent = `MEJOR ${best}` + (streak >= 2 ? ` · 🔥x${streak}` : '')
+    this.scoreValueEl.classList.add('bump')
+    window.setTimeout(() => this.scoreValueEl.classList.remove('bump'), 160)
+  }
+
+  showStopToast(stationIdx: number, result: StopResult, gained = 0) {
     const station = STATIONS[stationIdx]
     const messages: Record<StopResult['grade'], string> = {
       perfect: '¡Parada perfecta! 🎯',
@@ -264,7 +280,8 @@ export class UI {
       overshot: 'Te has pasado el andén…',
       undershot: 'Te has quedado corto…',
     }
-    this.flashToast(`${station.nameEn} — ${messages[result.grade]}`, result.grade)
+    const points = gained > 0 ? `  +${gained}` : ''
+    this.flashToast(`${station.nameEn} — ${messages[result.grade]}${points}`, result.grade)
   }
 
   showMissedToast(stationIdx: number) {
