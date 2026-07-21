@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as THREE from "three";
+
+type ThreeObject3D = import("three").Object3D;
+type ThreeMeshStandardMaterial = import("three").MeshStandardMaterial;
 
 type Station = {
   code: string;
@@ -237,6 +239,12 @@ export default function Home() {
     const mount = viewportRef.current;
     if (!mount) return;
 
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+
+    void import("three").then((THREE) => {
+      if (disposed) return;
+
     const scene = new THREE.Scene();
     scene.background = new THREE.Color("#8fb7c9");
     scene.fog = new THREE.Fog("#8fb7c9", 28, 205);
@@ -266,8 +274,8 @@ export default function Home() {
 
     const world = new THREE.Group();
     scene.add(world);
-    const moving: THREE.Object3D[] = [];
-    const nightMaterials: THREE.MeshStandardMaterial[] = [];
+    const moving: ThreeObject3D[] = [];
+    const nightMaterials: ThreeMeshStandardMaterial[] = [];
 
     const trackBed = new THREE.Mesh(
       new THREE.BoxGeometry(8.6, 0.34, 280),
@@ -516,7 +524,7 @@ export default function Home() {
 
       const signalState = sim.distance < 70 ? "RED" : sim.distance < 230 ? "YELLOW" : "GREEN";
       const signalColors = { GREEN: "#50e58a", YELLOW: "#ffd04a", RED: "#ff5a55" } as const;
-      const lampMaterial = signalLamp.material as THREE.MeshStandardMaterial;
+      const lampMaterial = signalLamp.material as ThreeMeshStandardMaterial;
       lampMaterial.color.set(signalColors[signalState]);
       lampMaterial.emissive.set(signalColors[signalState]);
       signalGroup.position.z = sim.distance < 235 ? -Math.max(16, sim.distance * 0.28) : -72;
@@ -601,7 +609,7 @@ export default function Home() {
     };
     renderFrame();
 
-    return () => {
+    cleanup = () => {
       cancelAnimationFrame(animationId);
       resizeObserver.disconnect();
       renderer.dispose();
@@ -612,7 +620,13 @@ export default function Home() {
           else object.material?.dispose();
         }
       });
-      mount.removeChild(renderer.domElement);
+      if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+    };
+    });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
     };
   }, [playChime]);
 
