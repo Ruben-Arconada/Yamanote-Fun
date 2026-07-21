@@ -95,3 +95,19 @@ export const ATTENTION_CHIME: PlayableNote[] = [
   { freq: A4 * Math.pow(2, 12 / 12), duration: 0.16 },
   { freq: A4 * Math.pow(2, 7 / 12), duration: 0.2 },
 ]
+
+// A short ascending chiptune arpeggio (played with the 'retro' square-wave
+// timbre) that opens the very first PA announcement of a session — a wholly
+// original little fanfare, not a quotation of any real game's jingle.
+const C4 = 261.63
+const E4 = 329.63
+const G4 = 392.0
+const C5 = 523.25
+export const RETRO_FANFARE: PlayableNote[] = [
+  { freq: C4, duration: 0.09 },
+  { freq: E4, duration: 0.09 },
+  { freq: G4, duration: 0.09 },
+  { freq: C5, duration: 0.16 },
+  { freq: G4, duration: 0.09 },
+  { freq: C5, duration: 0.24 },
+]

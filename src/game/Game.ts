@@ -115,8 +115,10 @@ export class Game {
     audio.unlock()
     this.started = true
     this.clock.start()
+    // Fire-and-forget — never blocks the game loop or player input, which
+    // can already move the train while this plays out.
+    window.setTimeout(() => this.handleWelcomeAnnounce(), 500)
   }
-
 
   private handleLook(dx: number, dy: number) {
     const sens = 0.0032
@@ -124,9 +126,25 @@ export class Game {
     this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - dy * sens, -LOOK_PITCH_LIMIT, LOOK_PITCH_LIMIT)
   }
 
+  /** The session's one-time welcome cue: next stop announced in JA/EN/ES with a retro chiptune fanfare. */
+  private handleWelcomeAnnounce() {
+    const next = STATIONS[this.train.targetStationIndex]
+    audio.announce(
+      [
+        { lang: 'ja', text: `次は、${next.nameJa}、${next.nameJa}です。` },
+        { lang: 'en', text: `The next station is ${next.nameEn}.` },
+        { lang: 'es', text: `La próxima estación es ${next.nameEn}.` },
+      ],
+      { fanfare: true },
+    )
+  }
+
   private handleDepartAnnounce(nextIdx: number) {
     const next = STATIONS[nextIdx]
-    audio.announce(`次は、${next.nameJa}、${next.nameJa}です。`, `The next station is ${next.nameEn}.`)
+    audio.announce([
+      { lang: 'ja', text: `次は、${next.nameJa}、${next.nameJa}です。` },
+      { lang: 'en', text: `The next station is ${next.nameEn}.` },
+    ])
   }
 
   private handleArrivingAnnounce(idx: number) {
@@ -134,10 +152,10 @@ export class Game {
     const sideJa = station.doorSide === 'left' ? '左側' : '右側'
     const transferJa = station.transferLines?.length ? ` ${station.transferLines.join('、')}はお乗り換えです。` : ''
     const transferEn = station.transferLines?.length ? ` Please change here for ${station.transferLines.join(', ')}.` : ''
-    audio.announce(
-      `まもなく、${station.nameJa}、${station.nameJa}です。${transferJa} お出口は${sideJa}です。`,
-      `We will soon make a brief stop at ${station.nameEn}.${transferEn} The doors on the ${station.doorSide} side will open.`,
-    )
+    audio.announce([
+      { lang: 'ja', text: `まもなく、${station.nameJa}、${station.nameJa}です。${transferJa} お出口は${sideJa}です。` },
+      { lang: 'en', text: `We will soon make a brief stop at ${station.nameEn}.${transferEn} The doors on the ${station.doorSide} side will open.` },
+    ])
   }
 
   private handleDoorsOpen(idx: number) {
@@ -152,7 +170,10 @@ export class Game {
     // Stop future melody repeats so the (short) closing-warning window reads
     // clearly instead of competing with the next loop iteration.
     audio.stopMelodyLoop()
-    audio.announce('ドアが閉まります。', 'The doors are closing.')
+    audio.announce([
+      { lang: 'ja', text: 'ドアが閉まります。' },
+      { lang: 'en', text: 'The doors are closing.' },
+    ])
   }
 
   private handleDoorsClose() {

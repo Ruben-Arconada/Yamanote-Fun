@@ -1,10 +1,24 @@
 import type { PlayableNote } from '../data/melodies'
-import { ATTENTION_CHIME } from '../data/melodies'
+import { ATTENTION_CHIME, RETRO_FANFARE } from '../data/melodies'
 
-export type Timbre = 'bell' | 'chime' | 'attention'
+export type Timbre = 'bell' | 'chime' | 'attention' | 'retro'
+export type AnnounceLang = 'ja' | 'en' | 'es'
+export interface AnnounceSegment {
+  lang: AnnounceLang
+  text: string
+}
 
 const JA_VOICE_PREFERENCE = ['Google 日本語', 'O-Ren', 'Kyoko', 'Sayaka', 'Ayumi', 'Haruka']
-const EN_VOICE_PREFERENCE = ['Google US English', 'Samantha', 'Daniel', 'Karen', 'Google UK English Female']
+// Zarvox/Trinoids/Whisper/Fred/Albert are the classic synthetic-sounding
+// system voices (macOS/eSpeak) — genuinely retro-computer timbre when
+// available; real, clear voices remain the fallback so quality never drops.
+const EN_VOICE_PREFERENCE = ['Zarvox', 'Trinoids', 'Whisper', 'Fred', 'Albert', 'Google US English', 'Samantha', 'Daniel', 'Karen']
+const ES_VOICE_PREFERENCE = ['Google español', 'Mónica', 'Paulina', 'Jorge', 'Diego', 'Juan']
+
+const LANG_TAG: Record<AnnounceLang, string> = { ja: 'ja-JP', en: 'en-US', es: 'es-ES' }
+const LANG_RATE: Record<AnnounceLang, number> = { ja: 0.88, en: 0.92, es: 0.92 }
+const LANG_PITCH_PREFERRED: Record<AnnounceLang, number> = { ja: 0.97, en: 0.9, es: 0.97 }
+const LANG_PITCH_FALLBACK: Record<AnnounceLang, number> = { ja: 1.08, en: 1.0, es: 1.02 }
 
 /**
  * All sound in this game is synthesized live with the Web Audio API — there
@@ -13,8 +27,9 @@ const EN_VOICE_PREFERENCE = ['Google US English', 'Samantha', 'Daniel', 'Karen',
  * sounds are procedural noise, not recordings. Spoken announcements use the
  * browser's built-in Web Speech API, which plays outside the Web Audio graph
  * — so the reverb bus below can process bells/chimes but not the voice
- * itself; the attention chime + timing around it is what ties them together
- * perceptually instead.
+ * itself; the attention chime + a chiptune fanfare + preferring genuinely
+ * synthetic-sounding system voices is what gives the PA its retro character
+ * without ever degrading the actual speech.
  */
 export class AudioEngine {
   private ctx: AudioContext | null = null
@@ -34,9 +49,12 @@ export class AudioEngine {
   private roomToneGain: GainNode | null = null
 
   private noiseBuffer: AudioBuffer | null = null
-  private jaVoice: SpeechSynthesisVoice | null = null
-  private enVoice: SpeechSynthesisVoice | null = null
-  private jaVoiceIsPreferred = false
+  private bitcrushCurveCache: Float32Array<ArrayBuffer> | null = null
+  private voiceMap: Record<AnnounceLang, { voice: SpeechSynthesisVoice | null; preferred: boolean }> = {
+    ja: { voice: null, preferred: false },
+    en: { voice: null, preferred: false },
+    es: { voice: null, preferred: false },
+  }
   private voicesReady = false
 
   private duckUntil = 0
@@ -98,6 +116,20 @@ export class AudioEngine {
       }
     }
     return buffer
+  }
+
+  /** A stair-stepped transfer curve (quantizes a clean waveform) for the retro/chiptune timbre — an 8-bit "feel" without any loss of clarity. */
+  private bitcrushCurve(): Float32Array<ArrayBuffer> {
+    if (this.bitcrushCurveCache) return this.bitcrushCurveCache
+    const steps = 5
+    const n = 512
+    const curve = new Float32Array(new ArrayBuffer(n * 4))
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1
+      curve[i] = Math.round(x * steps) / steps
+    }
+    this.bitcrushCurveCache = curve
+    return curve
   }
 
   private startAmbientBed() {
@@ -211,8 +243,9 @@ export class AudioEngine {
 
   private pluck(freq: number, startTime: number, duration: number, timbre: Timbre, volume: number) {
     const ctx = this.ctx!
-    const attack = timbre === 'attention' ? 0.004 : 0.008
-    const release = timbre === 'attention' ? Math.min(Math.max(duration * 0.8, 0.12), 0.3) : Math.max(duration * 0.9, 0.15)
+    const isPercussive = timbre === 'attention' || timbre === 'retro'
+    const attack = isPercussive ? 0.003 : 0.008
+    const release = isPercussive ? Math.min(Math.max(duration * 0.8, 0.09), 0.22) : Math.max(duration * 0.9, 0.15)
     const stopAt = startTime + attack + release + 0.1
 
     const envelope = (peak: number, rel: number) => {
@@ -230,6 +263,21 @@ export class AudioEngine {
       osc.type = 'sine'
       osc.frequency.value = freq
       osc.connect(envelope(volume, release))
+      osc.start(startTime)
+      osc.stop(stopAt)
+      return
+    }
+
+    if (timbre === 'retro') {
+      // A clean square wave through a stair-stepped shaper — the classic
+      // 8-bit/chiptune arpeggio timbre, snappy and bright rather than muddy.
+      const osc = ctx.createOscillator()
+      osc.type = 'square'
+      osc.frequency.value = freq
+      const shaper = ctx.createWaveShaper()
+      shaper.curve = this.bitcrushCurve()
+      osc.connect(shaper)
+      shaper.connect(envelope(volume, release))
       osc.start(startTime)
       osc.stop(stopAt)
       return
@@ -269,14 +317,14 @@ export class AudioEngine {
     const pick = () => {
       const voices = speechSynthesis.getVoices()
       if (!voices.length) return
-      const jaByPreference = this.pickByPreference(voices, JA_VOICE_PREFERENCE)
-      this.jaVoice = jaByPreference || voices.find((v) => v.lang.startsWith('ja')) || null
-      this.jaVoiceIsPreferred = !!jaByPreference
-      this.enVoice =
-        this.pickByPreference(voices, EN_VOICE_PREFERENCE) ||
-        voices.find((v) => v.lang.startsWith('en') && /US|GB/.test(v.lang)) ||
-        voices.find((v) => v.lang.startsWith('en')) ||
-        null
+      const assign = (key: AnnounceLang, preference: string[]) => {
+        const byPreference = this.pickByPreference(voices, preference)
+        const fallback = voices.find((v) => v.lang.startsWith(key)) || null
+        this.voiceMap[key] = { voice: byPreference || fallback, preferred: !!byPreference }
+      }
+      assign('ja', JA_VOICE_PREFERENCE)
+      assign('en', EN_VOICE_PREFERENCE)
+      assign('es', ES_VOICE_PREFERENCE)
       this.voicesReady = true
     }
     pick()
@@ -293,46 +341,54 @@ export class AudioEngine {
     return null
   }
 
+  private buildUtterance(lang: AnnounceLang, text: string): SpeechSynthesisUtterance {
+    const utter = new SpeechSynthesisUtterance(text)
+    utter.lang = LANG_TAG[lang]
+    utter.rate = LANG_RATE[lang]
+    const entry = this.voiceMap[lang]
+    utter.pitch = entry.preferred ? LANG_PITCH_PREFERRED[lang] : LANG_PITCH_FALLBACK[lang]
+    if (entry.voice) utter.voice = entry.voice
+    return utter
+  }
+
   /**
-   * Attention chime, then Japanese announcement, then a fixed pause, then
-   * English — closer to a real PA cadence than firing both at once. A newer
-   * announce() call supersedes an older one still in flight (rather than
-   * letting them queue up and pile behind each other, e.g. after the player
-   * skips several stations in a row), and the English half has a fallback
-   * timer in case the browser never fires the Japanese utterance's `onend`.
+   * Plays a PA announcement: an optional retro chiptune fanfare, an
+   * attention chime, then each segment spoken in order with a fixed pause
+   * between them. A newer announce() call supersedes an older one still in
+   * flight (rather than letting them queue up and pile behind each other,
+   * e.g. after the player skips several stations in a row), and each segment
+   * has a fallback timer in case the browser never fires `onend`. Entirely
+   * asynchronous — never blocks the game loop or player input.
    */
-  announce(textJa: string, textEn: string) {
-    if (!this.ctx || !('speechSynthesis' in window)) return
+  announce(segments: AnnounceSegment[], opts: { fanfare?: boolean } = {}) {
+    if (!this.ctx || !('speechSynthesis' in window) || !segments.length) return
     const myToken = ++this.announceToken
-    this.duckFor(3.5 + (textJa.length + textEn.length) * 0.05)
+    const totalChars = segments.reduce((n, s) => n + s.text.length, 0)
+    const fanfareDuration = opts.fanfare ? this.playMelody(RETRO_FANFARE, 'retro', 0.4) || 0.8 : 0
+    this.duckFor(3.5 + totalChars * 0.05 + fanfareDuration)
     const chimeDuration = this.playMelody(ATTENTION_CHIME, 'attention', 0.32) || 0.3
 
     window.setTimeout(() => {
       if (myToken !== this.announceToken) return
       speechSynthesis.cancel()
+      const utterances = segments.map((seg) => this.buildUtterance(seg.lang, seg.text))
 
-      const utterJa = new SpeechSynthesisUtterance(textJa)
-      utterJa.lang = 'ja-JP'
-      utterJa.rate = 0.9
-      utterJa.pitch = this.jaVoiceIsPreferred ? 1.0 : 1.1
-      if (this.jaVoice) utterJa.voice = this.jaVoice
-
-      const utterEn = new SpeechSynthesisUtterance(textEn)
-      utterEn.lang = 'en-US'
-      utterEn.rate = 0.95
-      if (this.enVoice) utterEn.voice = this.enVoice
-
-      let spokenEn = false
-      const speakEnglish = () => {
-        if (spokenEn || myToken !== this.announceToken) return
-        spokenEn = true
-        speechSynthesis.speak(utterEn)
+      const speakAt = (i: number) => {
+        if (myToken !== this.announceToken || i >= utterances.length) return
+        const utter = utterances[i]
+        let advanced = false
+        const advance = () => {
+          if (advanced) return
+          advanced = true
+          window.setTimeout(() => speakAt(i + 1), 550)
+        }
+        utter.onend = advance
+        // Fallback in case `onend` never fires (a known flakiness in some browsers' queued-utterance handling).
+        window.setTimeout(advance, segments[i].text.length * 130 + 1800)
+        speechSynthesis.speak(utter)
       }
-      utterJa.onend = () => window.setTimeout(speakEnglish, 650)
-      // Fallback in case `onend` never fires (a known flakiness in some browsers' queued-utterance handling).
-      window.setTimeout(speakEnglish, textJa.length * 130 + 1800)
-      speechSynthesis.speak(utterJa)
-    }, chimeDuration * 1000 + 100)
+      speakAt(0)
+    }, (fanfareDuration + chimeDuration) * 1000 + 100)
   }
 }
 
