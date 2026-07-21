@@ -32,11 +32,21 @@ type HudState = {
 type AudioRig = {
   context: AudioContext;
   master: GainNode;
+  compressor: DynamicsCompressorNode;
   traction: OscillatorNode;
   tractionGain: GainNode;
-  rail: OscillatorNode;
-  railGain: GainNode;
+  tractionHarmonic: OscillatorNode;
+  tractionHarmonicGain: GainNode;
+  inverter: OscillatorNode;
+  inverterGain: GainNode;
+  rumble: OscillatorNode;
+  rumbleGain: GainNode;
+  rollingNoise: AudioBufferSourceNode;
+  rollingGain: GainNode;
+  brakeNoise: AudioBufferSourceNode;
+  brakeGain: GainNode;
   filter: BiquadFilterNode;
+  chimeBus: GainNode;
 };
 
 const stations: Station[] = [
@@ -139,13 +149,19 @@ export default function Home() {
     const AudioContextClass = window.AudioContext;
     const context = new AudioContextClass();
     const master = context.createGain();
-    master.gain.value = 0.42;
-    master.connect(context.destination);
+    master.gain.value = 0.56;
+    const compressor = context.createDynamicsCompressor();
+    compressor.threshold.value = -17;
+    compressor.knee.value = 14;
+    compressor.ratio.value = 4;
+    compressor.attack.value = 0.012;
+    compressor.release.value = 0.28;
+    master.connect(compressor).connect(context.destination);
 
     const filter = context.createBiquadFilter();
     filter.type = "lowpass";
-    filter.frequency.value = 620;
-    filter.Q.value = 2.4;
+    filter.frequency.value = 920;
+    filter.Q.value = 1.35;
     filter.connect(master);
 
     const traction = context.createOscillator();
@@ -155,31 +171,170 @@ export default function Home() {
     traction.connect(tractionGain).connect(filter);
     traction.start();
 
-    const rail = context.createOscillator();
-    rail.type = "square";
-    const railGain = context.createGain();
-    railGain.gain.value = 0;
-    rail.connect(railGain).connect(filter);
-    rail.start();
-    audioRef.current = { context, master, traction, tractionGain, rail, railGain, filter };
+    const tractionHarmonic = context.createOscillator();
+    tractionHarmonic.type = "triangle";
+    const tractionHarmonicGain = context.createGain();
+    tractionHarmonicGain.gain.value = 0;
+    tractionHarmonic.connect(tractionHarmonicGain).connect(filter);
+    tractionHarmonic.start();
+
+    const inverter = context.createOscillator();
+    inverter.type = "sine";
+    const inverterGain = context.createGain();
+    inverterGain.gain.value = 0;
+    const inverterFilter = context.createBiquadFilter();
+    inverterFilter.type = "bandpass";
+    inverterFilter.frequency.value = 1800;
+    inverterFilter.Q.value = 1.8;
+    inverter.connect(inverterGain).connect(inverterFilter).connect(master);
+    inverter.start();
+
+    const rumble = context.createOscillator();
+    rumble.type = "sine";
+    const rumbleGain = context.createGain();
+    rumbleGain.gain.value = 0;
+    rumble.connect(rumbleGain).connect(master);
+    rumble.start();
+
+    const noiseBuffer = context.createBuffer(1, context.sampleRate * 3, context.sampleRate);
+    const noiseData = noiseBuffer.getChannelData(0);
+    let brown = 0;
+    for (let index = 0; index < noiseData.length; index += 1) {
+      const white = Math.random() * 2 - 1;
+      brown = (brown + 0.018 * white) / 1.018;
+      noiseData[index] = brown * 3.1;
+    }
+
+    const rollingNoise = context.createBufferSource();
+    rollingNoise.buffer = noiseBuffer;
+    rollingNoise.loop = true;
+    const rollingGain = context.createGain();
+    rollingGain.gain.value = 0;
+    const rollingFilter = context.createBiquadFilter();
+    rollingFilter.type = "bandpass";
+    rollingFilter.frequency.value = 760;
+    rollingFilter.Q.value = 0.72;
+    rollingNoise.connect(rollingFilter).connect(rollingGain).connect(master);
+    rollingNoise.start();
+
+    const brakeNoise = context.createBufferSource();
+    brakeNoise.buffer = noiseBuffer;
+    brakeNoise.loop = true;
+    const brakeGain = context.createGain();
+    brakeGain.gain.value = 0;
+    const brakeFilter = context.createBiquadFilter();
+    brakeFilter.type = "highpass";
+    brakeFilter.frequency.value = 1700;
+    brakeNoise.connect(brakeFilter).connect(brakeGain).connect(master);
+    brakeNoise.start();
+
+    const chimeBus = context.createGain();
+    chimeBus.gain.value = 0.86;
+    const reverb = context.createConvolver();
+    const reverbBuffer = context.createBuffer(2, context.sampleRate * 1.45, context.sampleRate);
+    for (let channel = 0; channel < 2; channel += 1) {
+      const impulse = reverbBuffer.getChannelData(channel);
+      for (let index = 0; index < impulse.length; index += 1) {
+        impulse[index] = (Math.random() * 2 - 1) * (1 - index / impulse.length) ** 2.7;
+      }
+    }
+    reverb.buffer = reverbBuffer;
+    const reverbGain = context.createGain();
+    reverbGain.gain.value = 0.19;
+    chimeBus.connect(master);
+    chimeBus.connect(reverb).connect(reverbGain).connect(master);
+
+    audioRef.current = {
+      context,
+      master,
+      compressor,
+      traction,
+      tractionGain,
+      tractionHarmonic,
+      tractionHarmonicGain,
+      inverter,
+      inverterGain,
+      rumble,
+      rumbleGain,
+      rollingNoise,
+      rollingGain,
+      brakeNoise,
+      brakeGain,
+      filter,
+      chimeBus,
+    };
   }, []);
 
   const playChime = useCallback((motif: number[], soft = false) => {
     const rig = audioRef.current;
     if (!rig || simRef.current.muted) return;
-    const now = rig.context.currentTime + 0.04;
-    motif.forEach((note, index) => {
-      const oscillator = rig.context.createOscillator();
+    const now = rig.context.currentTime + 0.06;
+    const sequence = [motif[0], motif[1], motif[2], motif[1], motif[3], motif[2], motif[3] + 2, motif[3]];
+    const durations = [0.32, 0.29, 0.46, 0.27, 0.36, 0.33, 0.38, 0.78];
+    let cursor = now;
+
+    sequence.forEach((note, index) => {
+      const start = cursor;
+      const duration = durations[index];
+      const fundamental = rig.context.createOscillator();
+      const shimmer = rig.context.createOscillator();
       const gain = rig.context.createGain();
-      oscillator.type = index % 2 === 0 ? "sine" : "triangle";
-      oscillator.frequency.value = midiToHz(note);
-      gain.gain.setValueAtTime(0.0001, now + index * 0.24);
-      gain.gain.exponentialRampToValueAtTime(soft ? 0.07 : 0.14, now + index * 0.24 + 0.025);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.24 + 0.52);
-      oscillator.connect(gain).connect(rig.master);
-      oscillator.start(now + index * 0.24);
-      oscillator.stop(now + index * 0.24 + 0.56);
+      const shimmerGain = rig.context.createGain();
+      fundamental.type = "sine";
+      shimmer.type = "triangle";
+      fundamental.frequency.value = midiToHz(note);
+      shimmer.frequency.value = midiToHz(note) * 2.005;
+      shimmer.detune.value = index % 2 === 0 ? 3 : -4;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(soft ? 0.055 : 0.115, start + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration + 0.32);
+      shimmerGain.gain.setValueAtTime(0.0001, start);
+      shimmerGain.gain.exponentialRampToValueAtTime(soft ? 0.012 : 0.026, start + 0.012);
+      shimmerGain.gain.exponentialRampToValueAtTime(0.0001, start + duration + 0.18);
+      fundamental.connect(gain).connect(rig.chimeBus);
+      shimmer.connect(shimmerGain).connect(rig.chimeBus);
+      fundamental.start(start);
+      shimmer.start(start);
+      fundamental.stop(start + duration + 0.38);
+      shimmer.stop(start + duration + 0.24);
+
+      if (index === 0 || index === 4 || index === 7) {
+        const harmony = rig.context.createOscillator();
+        const harmonyGain = rig.context.createGain();
+        harmony.type = "sine";
+        harmony.frequency.value = midiToHz(note - (index === 7 ? 5 : 12));
+        harmonyGain.gain.setValueAtTime(0.0001, start);
+        harmonyGain.gain.exponentialRampToValueAtTime(soft ? 0.018 : 0.038, start + 0.03);
+        harmonyGain.gain.exponentialRampToValueAtTime(0.0001, start + duration + 0.42);
+        harmony.connect(harmonyGain).connect(rig.chimeBus);
+        harmony.start(start);
+        harmony.stop(start + duration + 0.46);
+      }
+      cursor += duration;
     });
+  }, []);
+
+  const speakDeparture = useCallback((station: Station) => {
+    if (simRef.current.muted || !("speechSynthesis" in window)) return false;
+    const synthesis = window.speechSynthesis;
+    const voices = synthesis.getVoices();
+    const japanese = new SpeechSynthesisUtterance(`まもなく、${station.jp}です。`);
+    japanese.lang = "ja-JP";
+    japanese.rate = 0.88;
+    japanese.pitch = 1.02;
+    japanese.volume = 1;
+    japanese.voice = voices.find((voice) => voice.lang.toLowerCase().startsWith("ja")) ?? null;
+    const english = new SpeechSynthesisUtterance(`Next stop, ${station.en}.`);
+    english.lang = "en-GB";
+    english.rate = 0.88;
+    english.pitch = 0.96;
+    english.volume = 0.88;
+    english.voice = voices.find((voice) => voice.lang.toLowerCase().startsWith("en")) ?? null;
+    japanese.onend = () => synthesis.speak(english);
+    synthesis.cancel();
+    synthesis.resume();
+    synthesis.speak(japanese);
+    return true;
   }, []);
 
   const setPower = useCallback((notch: number) => {
@@ -208,8 +363,9 @@ export default function Home() {
     sim.power = 1;
     sim.brake = 0;
     setStarted(true);
-    playChime(current.motif, true);
-  }, [current.motif, initAudio, playChime]);
+    const voiceStarted = speakDeparture(next);
+    window.setTimeout(() => playChime(current.motif, true), voiceStarted ? 3400 : 80);
+  }, [current.motif, initAudio, next, playChime, speakDeparture]);
 
   const toggleMute = useCallback(() => {
     initAudio();
@@ -217,7 +373,7 @@ export default function Home() {
     simRef.current.muted = nextMuted;
     setMuted(nextMuted);
     if (audioRef.current) {
-      audioRef.current.master.gain.setTargetAtTime(nextMuted ? 0 : 0.42, audioRef.current.context.currentTime, 0.03);
+      audioRef.current.master.gain.setTargetAtTime(nextMuted ? 0 : 0.56, audioRef.current.context.currentTime, 0.03);
     }
   }, [initAudio]);
 
@@ -256,8 +412,10 @@ export default function Home() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.7));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.VSMShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.06;
     mount.appendChild(renderer.domElement);
 
     const ambient = new THREE.HemisphereLight("#d8efff", "#26302c", 1.35);
@@ -265,11 +423,17 @@ export default function Home() {
     const sun = new THREE.DirectionalLight("#ffe1ae", 2.4);
     sun.position.set(-22, 38, 18);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = -45;
-    sun.shadow.camera.right = 45;
-    sun.shadow.camera.top = 45;
-    sun.shadow.camera.bottom = -45;
+    const shadowSize = window.innerWidth < 760 ? 1024 : 2048;
+    sun.shadow.mapSize.set(shadowSize, shadowSize);
+    sun.shadow.camera.near = 2;
+    sun.shadow.camera.far = 105;
+    sun.shadow.camera.left = -34;
+    sun.shadow.camera.right = 34;
+    sun.shadow.camera.top = 34;
+    sun.shadow.camera.bottom = -34;
+    sun.shadow.bias = -0.00035;
+    sun.shadow.normalBias = 0.045;
+    sun.shadow.radius = 3;
     scene.add(sun);
 
     const world = new THREE.Group();
@@ -307,7 +471,38 @@ export default function Home() {
       world.add(sleeper);
     }
 
-    const buildingPalette = ["#b8b3aa", "#8d969c", "#d4c5b2", "#777d83", "#a39b91"];
+    const buildingPalette = ["#b8b3aa", "#8d969c", "#d4c5b2", "#777d83", "#a39b91", "#d7d2c5", "#778989"];
+    const signSpecs = [
+      { text: "喫茶", bg: "#d95345", fg: "#fff6df" },
+      { text: "薬", bg: "#f3f0dc", fg: "#d53c39" },
+      { text: "食堂", bg: "#275e79", fg: "#f6ecd1" },
+      { text: "酒場", bg: "#202a29", fg: "#efc36c" },
+      { text: "珈琲", bg: "#714837", fg: "#fff1d8" },
+      { text: "24H", bg: "#2f8368", fg: "#ffffff" },
+    ];
+    const signMaterials = signSpecs.map((spec) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 512;
+      const context = canvas.getContext("2d");
+      if (context) {
+        context.fillStyle = spec.bg;
+        context.fillRect(0, 0, 256, 512);
+        context.strokeStyle = "rgba(255,255,255,.72)";
+        context.lineWidth = 12;
+        context.strokeRect(15, 15, 226, 482);
+        context.fillStyle = spec.fg;
+        context.font = spec.text === "24H" ? "800 76px sans-serif" : "800 92px sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        if (spec.text === "24H") context.fillText(spec.text, 128, 256);
+        else [...spec.text].forEach((character, index) => context.fillText(character, 128, 160 + index * 180));
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, toneMapped: false });
+    });
+
     for (let i = 0; i < 56; i += 1) {
       const side = i % 2 === 0 ? -1 : 1;
       const width = 5 + ((i * 7) % 9);
@@ -324,22 +519,72 @@ export default function Home() {
       const building = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), facade);
       building.position.set(side * (8.8 + width / 2 + ((i * 3) % 8)), height / 2, z);
       building.userData.wrap = 285;
-      building.castShadow = true;
+      building.castShadow = false;
       building.receiveShadow = true;
       moving.push(building);
       world.add(building);
 
-      if (i % 3 === 0) {
-        const signMaterial = new THREE.MeshStandardMaterial({
-          color: i % 2 ? "#ec5b52" : "#4f8cbd",
-          emissive: i % 2 ? "#ec5b52" : "#4f8cbd",
-          emissiveIntensity: 0.2,
+      const innerFace = -side * (width / 2 + 0.055);
+      if (i % 2 === 0) {
+        const windowMaterial = new THREE.MeshStandardMaterial({
+          color: "#29383c",
+          emissive: i % 4 === 0 ? "#ffd8a0" : "#a8d8e8",
+          emissiveIntensity: 0.08,
+          roughness: 0.48,
         });
-        nightMaterials.push(signMaterial);
-        const sign = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.1, 3.8), signMaterial);
-        sign.position.set(-side * (width / 2 + 0.12), height * 0.64, 0);
-        sign.rotation.y = Math.PI / 2;
+        nightMaterials.push(windowMaterial);
+        const rows = Math.min(4, Math.max(2, Math.floor(height / 6)));
+        for (let row = 0; row < rows; row += 1) {
+          const windowBand = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.72, depth * 0.72), windowMaterial);
+          windowBand.position.set(innerFace, -height / 2 + 3.1 + row * 3.25, 0);
+          building.add(windowBand);
+          if (i % 4 === 0 && row < 3) {
+            const balcony = new THREE.Mesh(
+              new THREE.BoxGeometry(0.42, 0.14, depth * 0.84),
+              new THREE.MeshStandardMaterial({ color: "#535f60", metalness: 0.28, roughness: 0.66 }),
+            );
+            balcony.position.set(-side * (width / 2 + 0.22), windowBand.position.y - 0.62, 0);
+            building.add(balcony);
+          }
+        }
+      }
+
+      if (i % 3 === 0) {
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 3.45), signMaterials[i % signMaterials.length]);
+        sign.position.set(-side * (width / 2 + 0.18), Math.min(height * 0.24, height / 2 - 2.4), depth * 0.24);
+        sign.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
         building.add(sign);
+      }
+
+      if (i % 5 === 0) {
+        const awningColor = ["#315e70", "#a44d42", "#d8cfad"][i % 3];
+        const awning = new THREE.Mesh(
+          new THREE.BoxGeometry(0.72, 0.22, depth * 0.76),
+          new THREE.MeshStandardMaterial({ color: awningColor, roughness: 0.78 }),
+        );
+        awning.position.set(-side * (width / 2 + 0.3), -height / 2 + 2.6, 0);
+        awning.rotation.z = side * 0.08;
+        building.add(awning);
+
+        const vendingGlow = new THREE.MeshStandardMaterial({
+          color: "#e7ece6",
+          emissive: "#cfe9df",
+          emissiveIntensity: 0.34,
+          roughness: 0.5,
+        });
+        nightMaterials.push(vendingGlow);
+        const vendingMachine = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.9, 1.08), vendingGlow);
+        vendingMachine.position.set(-side * (width / 2 + 0.34), -height / 2 + 1.22, depth * 0.3);
+        building.add(vendingMachine);
+      }
+
+      if (i % 7 === 0) {
+        const rooftop = new THREE.Mesh(
+          new THREE.CylinderGeometry(1.15, 1.15, 1.35, 12),
+          new THREE.MeshStandardMaterial({ color: "#d9ded9", metalness: 0.35, roughness: 0.56 }),
+        );
+        rooftop.position.set(width * 0.18, height / 2 + 0.68, 0);
+        building.add(rooftop);
       }
     }
 
@@ -396,7 +641,30 @@ export default function Home() {
           new THREE.MeshStandardMaterial({ color: "#dde2df", metalness: 0.28 }),
         );
         column.position.set(side * 7.2, 3.6, -50 + col * 12);
+        column.castShadow = true;
         stationGroup.add(column);
+      }
+
+      const roof = new THREE.Mesh(
+        new THREE.BoxGeometry(6.5, 0.24, 76),
+        new THREE.MeshStandardMaterial({ color: side > 0 ? "#65706e" : "#747d7a", metalness: 0.22, roughness: 0.66 }),
+      );
+      roof.position.set(side * 7.15, 6.12, -18);
+      roof.castShadow = true;
+      roof.receiveShadow = true;
+      stationGroup.add(roof);
+
+      const fluorescentMaterial = new THREE.MeshStandardMaterial({
+        color: "#eef6ed",
+        emissive: "#e8fff1",
+        emissiveIntensity: 0.72,
+        toneMapped: false,
+      });
+      nightMaterials.push(fluorescentMaterial);
+      for (let lamp = 0; lamp < 6; lamp += 1) {
+        const fluorescent = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.07, 5.8), fluorescentMaterial);
+        fluorescent.position.set(side * 5.95, 5.94, -47 + lamp * 11.6);
+        stationGroup.add(fluorescent);
       }
     });
     stationGroup.position.z = -150;
@@ -455,6 +723,7 @@ export default function Home() {
     let animationId = 0;
     let hudTimer = 0;
     let lastStation = 0;
+    let lightingStep = -1;
 
     const resize = () => {
       if (!mount) return;
@@ -546,8 +815,15 @@ export default function Home() {
       ambient.color.set(daylight > 0.4 ? "#dbefff" : "#6784a0");
       sun.intensity = daylight * 2.8;
       sun.color.set(warm > 0.22 ? "#ffbf82" : "#fff1d0");
-      sun.position.x = Math.cos(day * Math.PI * 2) * 42;
-      sun.position.y = 8 + daylight * 38;
+      const nextLightingStep = Math.floor(sim.dayMinutes / 12);
+      if (nextLightingStep !== lightingStep) {
+        lightingStep = nextLightingStep;
+        const stableDay = (lightingStep * 12) / 1440;
+        sun.position.x = Math.cos(stableDay * Math.PI * 2) * 42;
+        sun.position.y = 8 + daylight * 38;
+        sun.position.z = Math.sin(stableDay * Math.PI * 2) * 24;
+        sun.shadow.needsUpdate = true;
+      }
       nightMaterials.forEach((material) => {
         material.emissiveIntensity = 0.03 + night * 1.8;
       });
@@ -558,12 +834,25 @@ export default function Home() {
       const rig = audioRef.current;
       if (rig) {
         const now = rig.context.currentTime;
-        const activeGain = sim.started && !sim.muted ? Math.min(0.085, sim.speed * 0.0012) : 0;
-        rig.traction.frequency.setTargetAtTime(52 + sim.speed * 4.4 + sim.power * 12, now, 0.08);
-        rig.tractionGain.gain.setTargetAtTime(activeGain, now, 0.09);
-        rig.rail.frequency.setTargetAtTime(5 + sim.speed * 0.72, now, 0.08);
-        rig.railGain.gain.setTargetAtTime(activeGain * 0.34, now, 0.09);
-        rig.filter.frequency.setTargetAtTime(460 + sim.speed * 17, now, 0.12);
+        const audible = sim.started && !sim.muted ? 1 : 0;
+        const speedRatio = Math.min(1, sim.speed / 78);
+        const loadRatio = sim.power / 4;
+        const brakingRatio = sim.brake / 8;
+        const motorFrequency = 44 + sim.speed * 3.65 + sim.power * 15;
+        const motorGain = audible * (0.012 + speedRatio * 0.032 + loadRatio * 0.026);
+        rig.traction.frequency.setTargetAtTime(motorFrequency, now, 0.065);
+        rig.tractionHarmonic.frequency.setTargetAtTime(motorFrequency * 2.015, now, 0.055);
+        rig.inverter.frequency.setTargetAtTime(540 + sim.speed * 30 + sim.power * 96, now, 0.045);
+        rig.rumble.frequency.setTargetAtTime(28 + sim.speed * 0.32, now, 0.11);
+        rig.tractionGain.gain.setTargetAtTime(motorGain, now, 0.08);
+        rig.tractionHarmonicGain.gain.setTargetAtTime(motorGain * 0.37, now, 0.07);
+        rig.inverterGain.gain.setTargetAtTime(audible * loadRatio * (0.006 + speedRatio * 0.012), now, 0.06);
+        rig.rumbleGain.gain.setTargetAtTime(audible * speedRatio * 0.038, now, 0.14);
+        rig.rollingNoise.playbackRate.setTargetAtTime(0.58 + speedRatio * 1.55, now, 0.12);
+        rig.rollingGain.gain.setTargetAtTime(audible * speedRatio * speedRatio * 0.11, now, 0.12);
+        rig.brakeNoise.playbackRate.setTargetAtTime(0.82 + speedRatio * 0.7, now, 0.1);
+        rig.brakeGain.gain.setTargetAtTime(audible * brakingRatio * Math.min(1, sim.speed / 18) * 0.075, now, 0.045);
+        rig.filter.frequency.setTargetAtTime(520 + sim.speed * 21 + sim.power * 80, now, 0.1);
       }
 
       hudTimer += dt;
@@ -603,7 +892,10 @@ export default function Home() {
         });
       }
 
-      if (lastStation !== sim.stationIndex) lastStation = sim.stationIndex;
+      if (lastStation !== sim.stationIndex) {
+        lastStation = sim.stationIndex;
+        speakDeparture(stations[(sim.stationIndex + 1) % stations.length]);
+      }
       renderer.render(scene, camera);
       animationId = requestAnimationFrame(renderFrame);
     };
@@ -628,7 +920,7 @@ export default function Home() {
       disposed = true;
       cleanup?.();
     };
-  }, [playChime]);
+  }, [playChime, speakDeparture]);
 
   return (
     <main className="game-shell">
