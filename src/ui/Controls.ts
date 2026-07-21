@@ -30,7 +30,13 @@ export class Controls {
       <div class="controller-track">
         <div class="controller-handle"><span class="controller-handle-label">N</span></div>
       </div>
-      <button class="controller-eb" aria-label="Freno de emergencia">緊急</button>
+      <button class="controller-eb" aria-label="Freno de emergencia">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2 L22 20 L2 20 Z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="16" x2="12" y2="16.01" />
+        </svg>
+      </button>
     `
     mount.appendChild(this.root)
 
@@ -63,6 +69,7 @@ export class Controls {
   private bindPointer() {
     const start = (e: PointerEvent) => {
       this.dragging = true
+      this.handle.classList.add('dragging')
       this.handle.setPointerCapture(e.pointerId)
       this.setNotch(this.notchFromClientY(e.clientY))
     }
@@ -72,6 +79,7 @@ export class Controls {
     }
     const end = () => {
       this.dragging = false
+      this.handle.classList.remove('dragging')
     }
     this.handle.addEventListener('pointerdown', start)
     this.handle.addEventListener('pointermove', move)
@@ -136,13 +144,19 @@ export class Controls {
   }
 
   private setNotch(n: number) {
-    this.notch = Math.min(MAX_NOTCH, Math.max(MIN_NOTCH, n))
+    const clamped = Math.min(MAX_NOTCH, Math.max(MIN_NOTCH, n))
+    const changed = clamped !== this.notch
+    this.notch = clamped
     const f = (this.notch - MIN_NOTCH) / NOTCH_COUNT // 0 (brake) .. 1 (power)
     this.handle.style.bottom = `${f * 100}%`
     this.labelEl.textContent = notchLabel(this.notch)
     this.handle.classList.toggle('controller-handle-brake', this.notch < 0)
     this.handle.classList.toggle('controller-handle-power', this.notch > 0)
     this.handle.classList.toggle('controller-handle-eb', this.notch === MIN_NOTCH)
+    if (changed) {
+      if (this.notch === MIN_NOTCH) navigator.vibrate?.([0, 25, 15, 25])
+      else navigator.vibrate?.(8)
+    }
     this.cb.onNotchChange(this.notch)
   }
 

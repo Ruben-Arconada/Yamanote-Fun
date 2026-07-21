@@ -28,6 +28,7 @@ const STOP_SPEED_THRESHOLD_KMH = 3
 const ARRIVING_ANNOUNCE_DISTANCE = 170
 const DWELL_SECONDS = 7
 const DOOR_ANIM_SECONDS = 1.4
+const CLOSING_WARN_LEAD_SECONDS = 4.5 // long enough for chime + short JA/EN warning to finish before doors actually close
 
 export type TrainRunState = 'running' | 'doors_open' | 'doors_closing'
 
@@ -43,6 +44,7 @@ export interface TrainEvents {
   onMissed?: (stationIndex: number, result: StopResult) => void
   onDoorsOpen?: (stationIndex: number) => void
   onDoorsClose?: (stationIndex: number) => void
+  onDoorsClosingWarning?: (stationIndex: number) => void
 }
 
 function wrappedSignedDelta(a: number, b: number): number {
@@ -62,6 +64,7 @@ export class Train {
   private track: Track
   private events: TrainEvents
   private announcedArriving = false
+  private announcedClosing = false
 
   constructor(track: Track, events: TrainEvents = {}) {
     this.track = track
@@ -95,6 +98,10 @@ export class Train {
     if (this.state === 'doors_open') {
       this.doorsOpenAmount = Math.min(1, this.doorsOpenAmount + dt / DOOR_ANIM_SECONDS)
       this.dwellRemaining -= dt
+      if (!this.announcedClosing && this.dwellRemaining <= CLOSING_WARN_LEAD_SECONDS) {
+        this.announcedClosing = true
+        this.events.onDoorsClosingWarning?.(this.targetStationIndex)
+      }
       if (this.dwellRemaining <= 0) {
         this.state = 'doors_closing'
         this.events.onDoorsClose?.(this.targetStationIndex)
@@ -163,6 +170,7 @@ export class Train {
     this.state = 'doors_open'
     this.doorsOpenAmount = 0
     this.dwellRemaining = DWELL_SECONDS
+    this.announcedClosing = false
     this.events.onStopped?.(this.targetStationIndex, result)
     this.events.onDoorsOpen?.(this.targetStationIndex)
   }

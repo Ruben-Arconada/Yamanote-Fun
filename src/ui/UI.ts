@@ -25,6 +25,7 @@ export class UI {
   private lineDiagram!: HTMLDivElement
   private stationDots: HTMLDivElement[] = []
   private doorIndicator!: HTMLDivElement
+  private lastNotchLabel = 'N'
   private mount: HTMLElement
   private cb: UICallbacks
 
@@ -50,7 +51,13 @@ export class UI {
   private buildHud() {
     this.hud.innerHTML = `
       <div class="hud-top">
-        <button class="hud-menu-btn" aria-label="Menú">☰</button>
+        <button class="hud-menu-btn" aria-label="Menú">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         <div class="hud-clock">
           <span class="hud-clock-time">07:30</span>
           <span class="hud-clock-phase">Mañana</span>
@@ -191,6 +198,11 @@ export class UI {
     doorsOpenAmount: number
   }) {
     this.speedEl.textContent = String(Math.round(opts.speedKmh))
+    if (opts.notchLabel !== this.lastNotchLabel) {
+      this.lastNotchLabel = opts.notchLabel
+      this.speedEl.classList.add('bump')
+      window.setTimeout(() => this.speedEl.classList.remove('bump'), 120)
+    }
     this.notchEl.textContent = opts.notchLabel
     this.notchEl.className = 'notch-readout' + (opts.notchLabel.startsWith('B') || opts.notchLabel === 'EB' ? ' braking' : opts.notchLabel.startsWith('P') ? ' powering' : '')
     this.stationNowEl.textContent = STATIONS[opts.currentStationIdx].nameEn

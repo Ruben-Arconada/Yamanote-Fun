@@ -61,6 +61,31 @@ export class TrackOffsetCurve extends THREE.Curve<THREE.Vector3> {
   }
 }
 
+/** Overhead catenary wire: follows the track at a fixed height with a gentle sag between poles. */
+export class CatenaryCurve extends THREE.Curve<THREE.Vector3> {
+  private track: Track
+  private height: number
+  private sagAmp: number
+  private poleCount: number
+  constructor(track: Track, height: number, sagAmp: number, poleCount: number) {
+    super()
+    this.track = track
+    this.height = height
+    this.sagAmp = sagAmp
+    this.poleCount = poleCount
+  }
+  getPoint(t: number, target = new THREE.Vector3()): THREE.Vector3 {
+    const p = this.track.pointAt(t)
+    const sag = Math.sin(((t * this.poleCount) % 1) * Math.PI) * this.sagAmp
+    return target.set(p.x, p.y + this.height - sag, p.z)
+  }
+}
+
+// Scales the whole loop up so consecutive stations sit farther apart, giving
+// room to actually accelerate and cruise before the next braking zone instead
+// of departing straight into it.
+const LOOP_SCALE = 2
+
 function buildLoopCurve(): THREE.CatmullRomCurve3 {
   const points: THREE.Vector3[] = []
   const N = 64
@@ -68,8 +93,8 @@ function buildLoopCurve(): THREE.CatmullRomCurve3 {
     const a = (i / N) * Math.PI * 2
     // Elongated N-S "stadium" shape with gentle irregularity so it doesn't
     // read as a perfect ellipse.
-    const rx = 420 + Math.sin(a * 2 + 0.6) * 55 + Math.sin(a * 5) * 12
-    const rz = 640 + Math.cos(a * 3) * 45
+    const rx = (420 + Math.sin(a * 2 + 0.6) * 55 + Math.sin(a * 5) * 12) * LOOP_SCALE
+    const rz = (640 + Math.cos(a * 3) * 45) * LOOP_SCALE
     const squash = 0.82 + 0.18 * Math.pow(Math.abs(Math.sin(a * 0.5)), 1.5)
     const x = Math.sin(a) * rx
     const z = -Math.cos(a) * rz * squash

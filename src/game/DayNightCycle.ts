@@ -187,7 +187,7 @@ export class DayNightCycle {
     return Math.sin(((this.timeOfDay - 6) / 12) * Math.PI) * 90
   }
 
-  update(dt: number) {
+  update(dt: number, focusPoint = new THREE.Vector3()) {
     if (!this.paused) {
       this.timeOfDay = (this.timeOfDay + (dt * 24) / REAL_SECONDS_PER_DAY) % 24
     }
@@ -202,14 +202,17 @@ export class DayNightCycle {
       Math.sin(elevRad),
       Math.cos(elevRad) * Math.sin(azRad),
     )
-    this.sunLight.position.copy(sunDir).multiplyScalar(this.sunDistance)
-    this.sunLight.target.position.set(0, 0, 0)
+    this.sunLight.target.position.copy(focusPoint)
+    this.sunLight.position.copy(focusPoint).addScaledVector(sunDir, this.sunDistance)
+    this.sunLight.target.updateMatrixWorld()
     this.sunLight.color.copy(kf.sunColor)
     this.sunLight.intensity = kf.sunIntensity
     this.sunLight.castShadow = elevationDeg > -2
 
     const moonDir = sunDir.clone().negate()
-    this.moonLight.position.copy(moonDir).multiplyScalar(this.sunDistance)
+    this.moonLight.target.position.copy(focusPoint)
+    this.moonLight.position.copy(focusPoint).addScaledVector(moonDir, this.sunDistance)
+    this.moonLight.target.updateMatrixWorld()
     this.moonLight.intensity = this.nightFactor * 0.25
 
     this.ambient.color.copy(kf.skyTop)
@@ -226,16 +229,17 @@ export class DayNightCycle {
       this.scene.fog.far = kf.fogFar
     }
 
-    this.sunSprite.position.copy(sunDir).multiplyScalar(1900)
+    this.sunSprite.position.copy(focusPoint).addScaledVector(sunDir, 1900)
     this.sunSprite.visible = elevationDeg > -8
     const sunMat = this.sunSprite.material as THREE.SpriteMaterial
     sunMat.opacity = THREE.MathUtils.clamp((elevationDeg + 8) / 14, 0, 1)
 
-    this.moonSprite.position.copy(moonDir).multiplyScalar(1900)
+    this.moonSprite.position.copy(focusPoint).addScaledVector(moonDir, 1900)
     this.moonSprite.visible = elevationDeg < 8
     const moonMat = this.moonSprite.material as THREE.SpriteMaterial
     moonMat.opacity = THREE.MathUtils.clamp((-elevationDeg + 8) / 14, 0, 1) * 0.9
 
     this.starsMaterial.opacity = this.nightFactor * 0.85
+    this.stars.position.copy(focusPoint)
   }
 }
