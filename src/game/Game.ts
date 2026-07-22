@@ -266,23 +266,50 @@ export class Game {
     bed.receiveShadow = true
     this.scene.add(bed)
 
-    // Sleepers, spaced at regular arc-length intervals along the bed.
+    // Sleepers: individual boards with air between them (they used to be
+    // longer than their spacing and fused into a dark ribbon), each with a
+    // little placement/size jitter and its own wood tone — and a warm honey
+    // tint inside every station's stop zone so the braking area reads at a
+    // glance from the cab.
     const sleeperSpacing = 2.2
     const sleeperCount = Math.floor(this.track.getLength() / sleeperSpacing)
-    const sleeperMat = new THREE.MeshStandardMaterial({ color: 0x2a231c, roughness: 0.95 })
-    const sleepers = new THREE.InstancedMesh(new THREE.BoxGeometry(3.4, 0.15, 2.4), sleeperMat, sleeperCount)
+    const sleeperMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 })
+    const sleepers = new THREE.InstancedMesh(new THREE.BoxGeometry(3.4, 0.15, 1.1), sleeperMat, sleeperCount)
+    sleepers.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(sleeperCount * 3), 3)
     sleepers.receiveShadow = true
     const sleeperDummy = new THREE.Object3D()
+    const sleeperTint = new THREE.Color()
+    const zoneTint = new THREE.Color(0x6e5530)
+    const trackLen = this.track.getLength()
+    const markerTs = STATIONS.map((_, i) => this.track.markerFor(i).tFraction)
     for (let i = 0; i < sleeperCount; i++) {
       const t = i / sleeperCount
       const p = this.track.pointAt(t)
       const tangent = this.track.tangentAt(t)
-      sleeperDummy.position.set(p.x, p.y - 0.02, p.z)
+      sleeperDummy.position.set(
+        p.x + (Math.random() - 0.5) * 0.16,
+        p.y - 0.02,
+        p.z + (Math.random() - 0.5) * 0.16,
+      )
       sleeperDummy.lookAt(p.x + tangent.x, p.y - 0.02, p.z + tangent.z)
+      sleeperDummy.rotateY((Math.random() - 0.5) * 0.06)
+      sleeperDummy.scale.set(0.94 + Math.random() * 0.12, 1, 0.85 + Math.random() * 0.3)
       sleeperDummy.updateMatrix()
       sleepers.setMatrixAt(i, sleeperDummy.matrix)
+
+      // Wood tone with per-board variation…
+      sleeperTint.setHSL(0.075 + Math.random() * 0.02, 0.28 + Math.random() * 0.12, 0.13 + Math.random() * 0.06)
+      // …shifted toward honey inside a stop zone.
+      let minDist = Infinity
+      for (const mt of markerTs) {
+        const d = Math.abs((((t - mt) % 1) + 1.5) % 1 - 0.5) * trackLen
+        if (d < minDist) minDist = d
+      }
+      if (minDist < 26) sleeperTint.lerp(zoneTint, 0.45)
+      sleepers.setColorAt(i, sleeperTint)
     }
     sleepers.instanceMatrix.needsUpdate = true
+    if (sleepers.instanceColor) sleepers.instanceColor.needsUpdate = true
     this.scene.add(sleepers)
 
     // Wide ground plane so the world doesn't feel like it ends at the ballast
@@ -564,12 +591,18 @@ export class Game {
     this.updateCameraFromTrain()
     this.updateLever()
     this.ui.updateClock(this.dayNight.timeOfDay, this.dayNight.phaseLabel)
+    // Progress along the current segment for the HUD's reference bar.
+    const currentT = this.track.markerFor(this.train.currentStationIndex).tFraction
+    const targetT = this.track.markerFor(this.train.targetStationIndex).tFraction
+    const segLen = ((((targetT - currentT) % 1) + 1) % 1) * this.track.getLength() || 1
+    const segmentProgress = THREE.MathUtils.clamp(1 - this.train.distanceToTarget / segLen, 0, 1)
     this.ui.updateTrain({
       speedKmh: this.train.speedKmh,
       notchLabel: notchLabel(this.train.notch),
       currentStationIdx: this.train.currentStationIndex,
       targetStationIdx: this.train.targetStationIndex,
       doorsOpenAmount: this.train.doorsOpenAmount,
+      segmentProgress,
     })
   }
 }

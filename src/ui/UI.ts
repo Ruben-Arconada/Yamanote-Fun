@@ -35,6 +35,8 @@ export class UI {
   private stationNextEl!: HTMLSpanElement
   private stationNowCodeEl!: HTMLSpanElement
   private stationNextCodeEl!: HTMLSpanElement
+  private segmentFillEl!: HTMLDivElement
+  private segmentTrainEl!: HTMLDivElement
   private lineDiagram!: HTMLDivElement
   private stationDots: HTMLDivElement[] = []
   private doorIndicator!: HTMLDivElement
@@ -81,13 +83,19 @@ export class UI {
           ${TIME_PRESETS.map((p) => `<button data-hour="${p.hour}">${p.label}</button>`).join('')}
         </div>
         <div class="hud-stations">
-          <div class="hud-station-now">
-            <small>PARADA ACTUAL</small>
-            <span class="hud-station-row"><span class="jy-badge hud-station-now-code">JY01</span><span class="hud-station-now-name">Tokyo</span></span>
+          <div class="hud-stations-row">
+            <div class="hud-station-now">
+              <small>PARADA ACTUAL</small>
+              <span class="hud-station-row"><span class="jy-badge hud-station-now-code">JY01</span><span class="hud-station-now-name">Tokyo</span></span>
+            </div>
+            <div class="hud-station-next">
+              <small>PRÓXIMA</small>
+              <span class="hud-station-row"><span class="jy-badge hud-station-next-code">JY02</span><span class="hud-station-next-name">Kanda</span></span>
+            </div>
           </div>
-          <div class="hud-station-next">
-            <small>PRÓXIMA</small>
-            <span class="hud-station-row"><span class="jy-badge hud-station-next-code">JY02</span><span class="hud-station-next-name">Kanda</span></span>
+          <div class="segment-progress">
+            <div class="segment-progress-fill"></div>
+            <div class="segment-progress-train">🚃</div>
           </div>
         </div>
       </div>
@@ -113,6 +121,8 @@ export class UI {
     this.stationNextEl = this.hud.querySelector('.hud-station-next-name')!
     this.stationNowCodeEl = this.hud.querySelector('.hud-station-now-code')!
     this.stationNextCodeEl = this.hud.querySelector('.hud-station-next-code')!
+    this.segmentFillEl = this.hud.querySelector('.segment-progress-fill')!
+    this.segmentTrainEl = this.hud.querySelector('.segment-progress-train')!
     this.doorIndicator = this.hud.querySelector('.door-indicator')!
     this.scoreValueEl = this.hud.querySelector('.score-value')!
     this.scoreBestEl = this.hud.querySelector('.score-best')!
@@ -241,6 +251,8 @@ export class UI {
     currentStationIdx: number
     targetStationIdx: number
     doorsOpenAmount: number
+    /** 0..1 — how far along the current inter-station segment the train is. */
+    segmentProgress: number
   }) {
     this.speedEl.textContent = String(Math.round(opts.speedKmh))
     if (opts.notchLabel !== this.lastNotchLabel) {
@@ -254,6 +266,9 @@ export class UI {
     this.stationNextEl.textContent = STATIONS[opts.targetStationIdx].nameEn
     this.stationNowCodeEl.textContent = `JY${String(opts.currentStationIdx + 1).padStart(2, '0')}`
     this.stationNextCodeEl.textContent = `JY${String(opts.targetStationIdx + 1).padStart(2, '0')}`
+    const pct = Math.round(opts.segmentProgress * 100)
+    this.segmentFillEl.style.width = `${pct}%`
+    this.segmentTrainEl.style.left = `${pct}%`
     this.doorIndicator.classList.toggle('open', opts.doorsOpenAmount > 0.05)
     this.doorIndicator.textContent = opts.doorsOpenAmount > 0.05 ? 'DOORS OPEN' : 'DOORS'
 
