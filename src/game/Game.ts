@@ -75,7 +75,9 @@ export class Game {
     this.scene.environmentIntensity = 0.15
     pmrem.dispose()
 
-    this.camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 9000)
+    // Near plane at 0.3 (nearest cab prop sits ~0.5 away): 3x the depth
+    // precision of the old 0.1, which is what made distant geometry shimmer.
+    this.camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.3, 9000)
     this.scene.add(this.camera)
 
     this.track = new Track()
@@ -277,10 +279,29 @@ export class Game {
     const sleepers = new THREE.InstancedMesh(new THREE.BoxGeometry(3.4, 0.15, 0.95), sleeperMat, sleeperCount)
     sleepers.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(sleeperCount * 3), 3)
     sleepers.receiveShadow = true
-    // Baked contact shadow: a soft dark pad under each board so they sit ON
-    // the ballast instead of floating over it.
-    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false })
-    const sleeperShadows = new THREE.InstancedMesh(new THREE.PlaneGeometry(3.9, 1.5), shadowMat, sleeperCount)
+    // Baked contact shadow: a soft-edged AO pad barely larger than each
+    // board — a hard black rectangle read as a floating slab of its own.
+    const shadowTex = (() => {
+      const c = document.createElement('canvas')
+      c.width = 128
+      c.height = 64
+      const ctx = c.getContext('2d')!
+      const g = ctx.createRadialGradient(64, 32, 4, 64, 32, 62)
+      g.addColorStop(0, 'rgba(0,0,0,0.55)')
+      g.addColorStop(0.55, 'rgba(0,0,0,0.35)')
+      g.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.save()
+      ctx.translate(64, 32)
+      ctx.scale(1, 0.5)
+      ctx.translate(-64, -32)
+      ctx.fillStyle = g
+      ctx.fillRect(0, -32, 128, 128)
+      ctx.restore()
+      const tex = new THREE.CanvasTexture(c)
+      return tex
+    })()
+    const shadowMat = new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, opacity: 0.8, depthWrite: false })
+    const sleeperShadows = new THREE.InstancedMesh(new THREE.PlaneGeometry(3.6, 1.15), shadowMat, sleeperCount)
     const sleeperDummy = new THREE.Object3D()
     const sleeperTint = new THREE.Color()
     const zoneTint = new THREE.Color(0x7d5f2e)
@@ -393,7 +414,9 @@ export class Game {
     const wireHeight = 6.6
 
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x3a3f45, metalness: 0.5, roughness: 0.5 })
-    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.14, 0.16, poleHeight, 8), poleMat, poleCount)
+    // Shafts run 0.5 longer so their feet reach the ground plane at -0.5
+    // instead of hovering at track height.
+    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.14, 0.16, poleHeight + 0.5, 8), poleMat, poleCount)
     poles.castShadow = true
     const arms = new THREE.InstancedMesh(new THREE.BoxGeometry(armLength, 0.1, 0.1), poleMat, poleCount)
 
@@ -405,7 +428,7 @@ export class Game {
       const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
       const base = p.clone().addScaledVector(normal, poleOffset)
 
-      dummy.position.set(base.x, base.y + poleHeight / 2, base.z)
+      dummy.position.set(base.x, base.y + (poleHeight - 0.5) / 2, base.z)
       dummy.rotation.set(0, 0, 0)
       dummy.updateMatrix()
       poles.setMatrixAt(i, dummy.matrix)

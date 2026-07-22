@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { Track } from './Track'
 import type { DayNightCycle } from './DayNightCycle'
 import { STATIONS } from '../data/stations'
-import { makeCloudTexture, makeNeonSignTexture, makeWindowGridTexture, applyProgressiveWindows } from './signage'
+import { makeCloudTexture, makeNeonSignTexture, makeWindowGridTexture, makeRoofTileTexture, applyProgressiveWindows } from './signage'
 
 const N = STATIONS.length
 
@@ -350,7 +350,7 @@ export class Scenery {
         sumX += pos.x
         sumZ += pos.z
 
-        dummy.position.set(pos.x, 1.6 * scale, pos.z)
+        dummy.position.set(pos.x, 1.6 * scale - 0.5, pos.z)
         dummy.scale.setScalar(scale)
         dummy.rotation.set(0, Math.random() * Math.PI, 0)
         dummy.updateMatrix()
@@ -360,7 +360,7 @@ export class Scenery {
           const br = (2.0 + Math.random() * 1.2) * scale
           dummy.position.set(
             pos.x + (Math.random() - 0.5) * 2.4 * scale,
-            (3.6 + Math.random() * 1.4) * scale,
+            (3.6 + Math.random() * 1.4) * scale - 0.5,
             pos.z + (Math.random() - 0.5) * 2.4 * scale,
           )
           dummy.scale.set(br, br * 0.8, br)
@@ -399,13 +399,13 @@ export class Scenery {
       const pos = p.clone().addScaledVector(normal, side * off)
       const scale = 0.7 + Math.random() * 0.9
 
-      dummy.position.set(pos.x, 1.3 * scale, pos.z)
+      dummy.position.set(pos.x, 1.3 * scale - 0.5, pos.z)
       dummy.scale.setScalar(scale)
       dummy.rotation.set(0, 0, 0)
       dummy.updateMatrix()
       pineTrunks.setMatrixAt(k, dummy.matrix)
 
-      dummy.position.set(pos.x, (2.6 + 2.2) * scale, pos.z)
+      dummy.position.set(pos.x, (2.6 + 2.2) * scale - 0.5, pos.z)
       dummy.scale.setScalar(scale)
       dummy.updateMatrix()
       pineFoliage.setMatrixAt(k, dummy.matrix)
@@ -433,7 +433,7 @@ export class Scenery {
       // Bias density toward the track: sqrt pushes samples inward.
       const off = 12 + Math.sqrt(Math.random()) * 55
       const pos = p.clone().addScaledVector(normal, side * off)
-      dummy.position.set(pos.x, 0.1, pos.z)
+      dummy.position.set(pos.x, -0.4, pos.z)
       dummy.scale.set(0.5 + Math.random() * 0.9, 0.2 + Math.random() * 0.3, 0.5 + Math.random() * 0.9)
       dummy.rotation.set(0, Math.random() * Math.PI, 0)
       dummy.updateMatrix()
@@ -456,20 +456,35 @@ export class Scenery {
     const tint = new THREE.Color()
     const houseCount = 320
 
-    // Pitched roof as a triangular prism (unit size, scaled per instance).
+    // Pitched roof as a triangular prism (unit size, scaled per instance),
+    // CLOSED underneath — the open soffit let you see straight through the
+    // eaves into backfaces — and with UVs so the kawara tile texture maps
+    // along each slope.
     const roofGeo = new THREE.BufferGeometry()
     const hw = 0.62 // slight eave overhang beyond the unit wall
     const verts = new Float32Array([
-      // front triangle
+      // front gable triangle
       -hw, 0, 0.62, hw, 0, 0.62, 0, 0.5, 0.62,
-      // back triangle
+      // back gable triangle
       hw, 0, -0.62, -hw, 0, -0.62, 0, 0.5, -0.62,
       // left slope
       -hw, 0, 0.62, 0, 0.5, 0.62, 0, 0.5, -0.62, -hw, 0, 0.62, 0, 0.5, -0.62, -hw, 0, -0.62,
       // right slope
       hw, 0, 0.62, hw, 0, -0.62, 0, 0.5, -0.62, hw, 0, 0.62, 0, 0.5, -0.62, 0, 0.5, 0.62,
+      // soffit (underside, facing down)
+      -hw, 0, 0.62, -hw, 0, -0.62, hw, 0, -0.62, -hw, 0, 0.62, hw, 0, -0.62, hw, 0, 0.62,
+    ])
+    // UVs: gables get shrunk corners of the texture; slopes span it fully
+    // (u = along eave, v = up the slope); soffit reuses a dark-ish corner.
+    const uvs = new Float32Array([
+      0, 0, 0.25, 0, 0.125, 0.2,
+      0, 0, 0.25, 0, 0.125, 0.2,
+      0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0,
+      0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1,
+      0, 0, 0, 0.1, 0.1, 0.1, 0, 0, 0.1, 0.1, 0.1, 0,
     ])
     roofGeo.setAttribute('position', new THREE.BufferAttribute(verts, 3))
+    roofGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
     roofGeo.computeVertexNormals()
 
     const windowTex = (() => {
@@ -516,7 +531,7 @@ export class Scenery {
     walls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
     walls.castShadow = walls.receiveShadow = true
 
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 })
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: makeRoofTileTexture(), roughness: 0.8 })
     const roofs = new THREE.InstancedMesh(roofGeo, roofMat, houseCount)
     roofs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
     roofs.castShadow = true
@@ -530,6 +545,9 @@ export class Scenery {
     const TUFTS_PER_HOUSE = 4
     const tufts = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), tuftMat, houseCount * TUFTS_PER_HOUSE)
     tufts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * TUFTS_PER_HOUSE * 3), 3)
+    // A front door per house — the one detail that says "someone lives here".
+    const doorMat = new THREE.MeshStandardMaterial({ color: 0x2e2622, roughness: 0.8 })
+    const doors = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.95, 1.9), doorMat, houseCount)
 
     const wallTones = [0xcfc4b0, 0xbfb6a6, 0xd8d2c4, 0xa89c8a, 0xc4b8b0, 0xb0a898]
     const roofTones = [0x3a4453, 0x46424a, 0x54423a, 0x3d4a42, 0x424b58]
@@ -557,7 +575,10 @@ export class Scenery {
         const d = 5 + Math.random() * 4
         const yaw = Math.atan2(tangent.x, tangent.z) + (Math.random() - 0.5) * 0.3
 
-        dummy.position.set(pos.x, h / 2, pos.z)
+        // Feet on the ACTUAL ground plane (y = -0.5): standing on y = 0 left
+        // every house hovering half a meter with its shadow detached below.
+        const GROUND_Y = -0.5
+        dummy.position.set(pos.x, GROUND_Y + h / 2, pos.z)
         dummy.scale.set(w, h, d)
         dummy.rotation.set(0, yaw, 0)
         dummy.updateMatrix()
@@ -567,21 +588,31 @@ export class Scenery {
 
         // Roof sits slightly sunk into the walls (no gap ring at the eaves).
         const roofScaleY = h * 0.55
-        dummy.position.set(pos.x, h - 0.12, pos.z)
+        dummy.position.set(pos.x, GROUND_Y + h - 0.12, pos.z)
         dummy.scale.set(w, roofScaleY, d)
         dummy.updateMatrix()
         roofs.setMatrixAt(idx, dummy.matrix)
         const roofTone = roofTones[Math.floor(Math.random() * roofTones.length)]
-        tint.setHex(roofTone)
+        // Lifted because the tile texture's gray midtone halves the brightness.
+        tint.setHex(roofTone).multiplyScalar(1.7)
         roofs.setColorAt(idx, tint)
 
         // Ridge cap riding the peak, a darker shade of the same tile tone.
-        dummy.position.set(pos.x, h - 0.12 + roofScaleY * 0.5, pos.z)
+        dummy.position.set(pos.x, GROUND_Y + h - 0.12 + roofScaleY * 0.5, pos.z)
         dummy.scale.set(0.5, 0.22, d * 1.27)
         dummy.updateMatrix()
         ridgeCaps.setMatrixAt(idx, dummy.matrix)
-        tint.setHex(roofTone).multiplyScalar(0.72)
+        tint.setHex(roofTone).multiplyScalar(0.85)
         ridgeCaps.setColorAt(idx, tint)
+
+        // Front door on the +Z face (post-yaw), just proud of the wall.
+        const doorDirX = Math.sin(yaw)
+        const doorDirZ = Math.cos(yaw)
+        dummy.position.set(pos.x + doorDirX * (d / 2 + 0.02), GROUND_Y + 0.95, pos.z + doorDirZ * (d / 2 + 0.02))
+        dummy.scale.set(1, 1, 1)
+        dummy.rotation.set(0, yaw, 0)
+        dummy.updateMatrix()
+        doors.setMatrixAt(idx, dummy.matrix)
 
         // Scruffy grass ring at the foundation.
         for (let g = 0; g < TUFTS_PER_HOUSE; g++) {
@@ -589,7 +620,7 @@ export class Scenery {
           const ang = Math.random() * Math.PI * 2
           const rx = (w / 2 + 0.25) * Math.cos(ang)
           const rz = (d / 2 + 0.25) * Math.sin(ang)
-          dummy.position.set(pos.x + rx, 0.08, pos.z + rz)
+          dummy.position.set(pos.x + rx, GROUND_Y + 0.12, pos.z + rz)
           dummy.scale.set(0.3 + Math.random() * 0.35, 0.14 + Math.random() * 0.16, 0.3 + Math.random() * 0.35)
           dummy.rotation.set(0, Math.random() * Math.PI, 0)
           dummy.updateMatrix()
@@ -600,17 +631,18 @@ export class Scenery {
         idx++
       }
     }
-    walls.count = roofs.count = ridgeCaps.count = idx
+    walls.count = roofs.count = ridgeCaps.count = doors.count = idx
     tufts.count = idx * TUFTS_PER_HOUSE
     walls.instanceMatrix.needsUpdate = true
     roofs.instanceMatrix.needsUpdate = true
     ridgeCaps.instanceMatrix.needsUpdate = true
+    doors.instanceMatrix.needsUpdate = true
     tufts.instanceMatrix.needsUpdate = true
     if (walls.instanceColor) walls.instanceColor.needsUpdate = true
     if (roofs.instanceColor) roofs.instanceColor.needsUpdate = true
     if (ridgeCaps.instanceColor) ridgeCaps.instanceColor.needsUpdate = true
     if (tufts.instanceColor) tufts.instanceColor.needsUpdate = true
-    this.scene.add(walls, roofs, ridgeCaps, tufts)
+    this.scene.add(walls, roofs, ridgeCaps, doors, tufts)
   }
 
   /**
@@ -626,7 +658,8 @@ export class Scenery {
     const poleH = 8.4
 
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x5c554c, roughness: 0.9 })
-    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.16, poleH, 6), poleMat, count)
+    // 0.5 longer so the feet stand on the ground plane, not at track height.
+    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.16, poleH + 0.5, 6), poleMat, count)
     const arms = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 0.09, 0.09), poleMat, count * 2)
     poles.castShadow = true
 
@@ -638,7 +671,7 @@ export class Scenery {
       const tangent = this.track.tangentAt(t)
       const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
       const base = p.clone().addScaledVector(normal, offset)
-      dummy.position.set(base.x, base.y + poleH / 2, base.z)
+      dummy.position.set(base.x, base.y + (poleH - 0.5) / 2, base.z)
       dummy.rotation.set(0, Math.atan2(tangent.x, tangent.z), 0)
       dummy.updateMatrix()
       poles.setMatrixAt(i, dummy.matrix)
@@ -788,6 +821,7 @@ export class Scenery {
       const base = p.clone().addScaledVector(normal, side * 6.5)
       const g = new THREE.Group()
       g.position.copy(base)
+      g.position.y -= 0.42 // feet on the worn trackside band, not floating at rail height
       g.rotation.y = Math.atan2(normal.x, normal.z) + (side < 0 ? Math.PI : 0)
 
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 3.4, 6), poleMat)

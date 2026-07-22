@@ -308,6 +308,44 @@ export function makeWindowGridTexture(cols: number, rows: number, opts: WindowGr
 }
 
 /**
+ * Kawara roof-tile pattern: horizontal courses with staggered joints and
+ * per-tile shade variation, drawn in neutral grays so each roof's instance
+ * tint colors it. Mapped up the slope (v) and along the eave (u).
+ */
+export function makeRoofTileTexture(): THREE.CanvasTexture {
+  const size = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = '#8f8f92'
+  ctx.fillRect(0, 0, size, size)
+  const rows = 9
+  const cols = 12
+  const rowH = size / rows
+  const colW = size / cols
+  for (let r = 0; r < rows; r++) {
+    const offset = (r % 2) * (colW / 2)
+    for (let c = -1; c < cols; c++) {
+      // Per-tile tonal wobble.
+      const shade = 128 + Math.floor((Math.random() - 0.5) * 34)
+      ctx.fillStyle = `rgb(${shade},${shade},${Math.min(255, shade + 3)})`
+      ctx.fillRect(c * colW + offset + 1, r * rowH + 1, colW - 2, rowH - 2)
+      // Rounded tile-cap hint at the course edge.
+      ctx.fillStyle = 'rgba(255,255,255,0.10)'
+      ctx.fillRect(c * colW + offset + 1, r * rowH + 1, colW - 2, 3)
+    }
+    // Course shadow line — what makes the rows read as overlapping tiles.
+    ctx.fillStyle = 'rgba(0,0,0,0.38)'
+    ctx.fillRect(0, (r + 1) * rowH - 2.5, size, 2.5)
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
+/**
  * Worn trackside ground band: oily gravel and dead grass tones near the
  * rails, alpha-fading to nothing at both edges so it melts into the ground
  * plane without a visible seam.
