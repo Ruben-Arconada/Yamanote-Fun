@@ -308,6 +308,42 @@ export function makeWindowGridTexture(cols: number, rows: number, opts: WindowGr
 }
 
 /**
+ * Worn trackside ground band: oily gravel and dead grass tones near the
+ * rails, alpha-fading to nothing at both edges so it melts into the ground
+ * plane without a visible seam.
+ */
+export function makeTracksideWearTexture(): THREE.CanvasTexture {
+  const w = 256
+  const h = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')!
+  ctx.clearRect(0, 0, w, h)
+  const tones = ['#3d3a32', '#46423a', '#38352c', '#4a443a', '#403c30', '#35322b']
+  for (let i = 0; i < 240; i++) {
+    const x = Math.random() * w
+    const y = Math.random() * h
+    const r = 10 + Math.random() * 42
+    // Fade strength by distance from horizontal center so blobs thin out
+    // toward the edges before the hard alpha ramp even kicks in.
+    const centerFade = 1 - Math.abs(x / w - 0.5) * 2
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r)
+    const tone = tones[Math.floor(Math.random() * tones.length)]
+    g.addColorStop(0, tone + Math.round(200 * centerFade).toString(16).padStart(2, '0'))
+    g.addColorStop(1, tone + '00')
+    ctx.fillStyle = g
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
+/**
  * Shared dusk progress for every window-lit material: 0 = broad daylight
  * (all windows dark), 1 = deep night (all lit). Driven once per frame from
  * the day/night cycle.

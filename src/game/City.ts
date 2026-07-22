@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Track } from './Track'
 import { STATIONS, prevStationIndex, nextStationIndex } from '../data/stations'
-import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture, applyProgressiveWindows } from './signage'
+import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture, applyProgressiveWindows, YAMANOTE_LINE_COLOR } from './signage'
 
 const THEME_GROUPS = ['business', 'downtown', 'shitamachi', 'green', 'youth', 'bay'] as const
 const N = STATIONS.length
@@ -286,10 +286,37 @@ export class City {
     this.ledStripMat = new THREE.MeshStandardMaterial({ color: 0xdff2ff, emissive: 0xbfe8ff, emissiveIntensity: 0.1, roughness: 0.5 })
     const ledStrips = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 0.06, PLATFORM_LEN - 6), this.ledStripMat, modernCount)
 
+    // Every station: cross-beams tying the canopy to its columns, and small
+    // hanging wayfinding boards under the canopy — the roof stops being an
+    // empty slab overhead.
+    const beamMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.3, roughness: 0.6 })
+    const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(ROOF_WIDTH - 1.2, 0.14, 0.2), beamMat, N * COLUMN_ZS.length)
+    beams.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * COLUMN_ZS.length * 3), 3)
+    const hangSignTex = (() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 128
+      canvas.height = 48
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#f4f2ea'
+      ctx.fillRect(0, 0, 128, 48)
+      ctx.fillStyle = '#' + YAMANOTE_LINE_COLOR.toString(16).padStart(6, '0')
+      ctx.fillRect(0, 38, 128, 10)
+      ctx.fillStyle = '#222'
+      ctx.font = '700 20px "Hiragino Sans", sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('のりば', 64, 26)
+      const tex = new THREE.CanvasTexture(canvas)
+      tex.colorSpace = THREE.SRGBColorSpace
+      return tex
+    })()
+    // Front/back instance pairs (not DoubleSide) so のりば never mirrors.
+    const hangSignMat = new THREE.MeshStandardMaterial({ map: hangSignTex, emissive: 0xffffff, emissiveMap: hangSignTex, emissiveIntensity: 0.08, roughness: 0.7 })
+    const hangSigns = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 0.55), hangSignMat, N * 4)
+
     const instancedPools: THREE.InstancedMesh[] = [
       platformSlab, safetyStrip, tactileStrip, roof, fascia, columns, columnBands, struts,
       lampBody, lampHousing, signFrame, signRods, bench, vending, clockPole, clockFace, mapBoard,
-      ridges, lanternPosts, lanterns, windbreaks, ledStrips,
+      ridges, lanternPosts, lanterns, windbreaks, ledStrips, beams, hangSigns,
     ]
     let rusticIdx = 0
     let modernIdx = 0
@@ -325,6 +352,7 @@ export class City {
       bench.setColorAt(s, tint.setHex(style.bench))
       for (let c = 0; c < COLUMN_ZS.length; c++) {
         columns.setColorAt(s * COLUMN_ZS.length + c, tint.setHex(style.column))
+        beams.setColorAt(s * COLUMN_ZS.length + c, tint.setHex(style.column).multiplyScalar(0.82))
       }
 
       const group = new THREE.Group()
@@ -351,6 +379,14 @@ export class City {
         put(columns, idx, group, new THREE.Vector3(sx(PLATFORM_OUTER - 0.6), COLUMN_Y, cz))
         put(columnBands, idx, group, new THREE.Vector3(sx(PLATFORM_OUTER - 0.6), PLATFORM_TOP + 0.6, cz))
         put(struts, idx, group, new THREE.Vector3(sx(PLATFORM_OUTER - 1.5), COLUMN_TOP - 0.05, cz), 0, 0, -side * Math.PI * 0.18)
+        put(beams, idx, group, new THREE.Vector3(sx(ROOF_MID), COLUMN_TOP - 0.12, cz))
+      })
+      // Hanging boards under the canopy near each platform end, readable both ways.
+      ;[-18, 18].forEach((hz, i) => {
+        for (const flip of [0, 1]) {
+          const idx = s * 4 + i * 2 + flip
+          put(hangSigns, idx, group, new THREE.Vector3(sx(ROOF_MID - 1), COLUMN_TOP - 0.62, hz + (flip ? 0.02 : -0.02)), flip ? Math.PI : 0)
+        }
       })
 
       LAMP_ZS.forEach((lz, i) => {

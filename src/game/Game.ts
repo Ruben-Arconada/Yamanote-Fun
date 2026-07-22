@@ -10,7 +10,7 @@ import { Controls } from '../ui/Controls'
 import { UI } from '../ui/UI'
 import { STATIONS } from '../data/stations'
 import { getStationMelody, DOOR_CHIME_OPEN, DOOR_CHIME_CLOSE } from '../data/melodies'
-import { makeBallastTexture, makeScuffedPanelTexture, makeDestinationTexture, makeGroundTexture, WINDOW_DUSK_UNIFORM } from './signage'
+import { makeBallastTexture, makeScuffedPanelTexture, makeDestinationTexture, makeGroundTexture, makeTracksideWearTexture, WINDOW_DUSK_UNIFORM } from './signage'
 
 const LOOK_YAW_LIMIT = 1.7 // ~97°, enough to look out the side windows
 const LOOK_PITCH_LIMIT = 0.55
@@ -271,46 +271,58 @@ export class Game {
     // little placement/size jitter and its own wood tone — and a warm honey
     // tint inside every station's stop zone so the braking area reads at a
     // glance from the cab.
-    const sleeperSpacing = 2.2
+    const sleeperSpacing = 1.7
     const sleeperCount = Math.floor(this.track.getLength() / sleeperSpacing)
     const sleeperMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 })
-    const sleepers = new THREE.InstancedMesh(new THREE.BoxGeometry(3.4, 0.15, 1.1), sleeperMat, sleeperCount)
+    const sleepers = new THREE.InstancedMesh(new THREE.BoxGeometry(3.4, 0.15, 0.95), sleeperMat, sleeperCount)
     sleepers.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(sleeperCount * 3), 3)
     sleepers.receiveShadow = true
+    // Baked contact shadow: a soft dark pad under each board so they sit ON
+    // the ballast instead of floating over it.
+    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false })
+    const sleeperShadows = new THREE.InstancedMesh(new THREE.PlaneGeometry(3.9, 1.5), shadowMat, sleeperCount)
     const sleeperDummy = new THREE.Object3D()
     const sleeperTint = new THREE.Color()
-    const zoneTint = new THREE.Color(0x6e5530)
+    const zoneTint = new THREE.Color(0x7d5f2e)
     const trackLen = this.track.getLength()
     const markerTs = STATIONS.map((_, i) => this.track.markerFor(i).tFraction)
     for (let i = 0; i < sleeperCount; i++) {
       const t = i / sleeperCount
       const p = this.track.pointAt(t)
       const tangent = this.track.tangentAt(t)
+      // Just a whisper of irregularity — boards laid by hand, not scattered.
       sleeperDummy.position.set(
-        p.x + (Math.random() - 0.5) * 0.16,
+        p.x + (Math.random() - 0.5) * 0.05,
         p.y - 0.02,
-        p.z + (Math.random() - 0.5) * 0.16,
+        p.z + (Math.random() - 0.5) * 0.05,
       )
       sleeperDummy.lookAt(p.x + tangent.x, p.y - 0.02, p.z + tangent.z)
-      sleeperDummy.rotateY((Math.random() - 0.5) * 0.06)
-      sleeperDummy.scale.set(0.94 + Math.random() * 0.12, 1, 0.85 + Math.random() * 0.3)
+      sleeperDummy.rotateY((Math.random() - 0.5) * 0.018)
+      sleeperDummy.scale.set(0.97 + Math.random() * 0.06, 1, 0.95 + Math.random() * 0.1)
       sleeperDummy.updateMatrix()
       sleepers.setMatrixAt(i, sleeperDummy.matrix)
 
-      // Wood tone with per-board variation…
-      sleeperTint.setHSL(0.075 + Math.random() * 0.02, 0.28 + Math.random() * 0.12, 0.13 + Math.random() * 0.06)
-      // …shifted toward honey inside a stop zone.
+      sleeperDummy.position.y = p.y - 0.088
+      sleeperDummy.rotateX(-Math.PI / 2)
+      sleeperDummy.updateMatrix()
+      sleeperShadows.setMatrixAt(i, sleeperDummy.matrix)
+      sleeperDummy.rotation.set(0, 0, 0)
+
+      // Dark creosote wood with slight per-board variation…
+      sleeperTint.setHSL(0.075 + Math.random() * 0.015, 0.26 + Math.random() * 0.1, 0.085 + Math.random() * 0.035)
+      // …shifted toward honey inside a stop zone: the braking guide.
       let minDist = Infinity
       for (const mt of markerTs) {
         const d = Math.abs((((t - mt) % 1) + 1.5) % 1 - 0.5) * trackLen
         if (d < minDist) minDist = d
       }
-      if (minDist < 26) sleeperTint.lerp(zoneTint, 0.45)
+      if (minDist < 26) sleeperTint.lerp(zoneTint, 0.55)
       sleepers.setColorAt(i, sleeperTint)
     }
     sleepers.instanceMatrix.needsUpdate = true
+    sleeperShadows.instanceMatrix.needsUpdate = true
     if (sleepers.instanceColor) sleepers.instanceColor.needsUpdate = true
-    this.scene.add(sleepers)
+    this.scene.add(sleepers, sleeperShadows)
 
     // Wide ground plane so the world doesn't feel like it ends at the ballast
     // edge — with a faint city-block texture so it reads as streets from the
@@ -326,6 +338,37 @@ export class Game {
     ground.position.y = -0.5
     ground.receiveShadow = true
     this.scene.add(ground)
+
+    // Worn corridor beside the rails: a wider, alpha-edged band of beaten
+    // earth riding just above the ground plane, so the trackside looks used
+    // and the pristine ground only starts a little way out.
+    const wearPositions: number[] = []
+    const wearUvs: number[] = []
+    const wearHalf = 14
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments
+      const p = this.track.pointAt(t)
+      const tangent = this.track.tangentAt(t)
+      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+      const pl = p.clone().addScaledVector(normal, wearHalf)
+      const pr = p.clone().addScaledVector(normal, -wearHalf)
+      wearPositions.push(pl.x, -0.42, pl.z, pr.x, -0.42, pr.z)
+      wearUvs.push(0, t * 260, 1, t * 260)
+    }
+    const wearGeo = new THREE.BufferGeometry()
+    wearGeo.setAttribute('position', new THREE.Float32BufferAttribute(wearPositions, 3))
+    wearGeo.setAttribute('uv', new THREE.Float32BufferAttribute(wearUvs, 2))
+    wearGeo.setIndex(indices)
+    wearGeo.computeVertexNormals()
+    const wearMat = new THREE.MeshStandardMaterial({
+      map: makeTracksideWearTexture(),
+      transparent: true,
+      depthWrite: false,
+      roughness: 1,
+    })
+    const wear = new THREE.Mesh(wearGeo, wearMat)
+    wear.receiveShadow = true
+    this.scene.add(wear)
 
     const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.35, metalness: 0.85 })
     for (const offset of [0.75, -0.75]) {

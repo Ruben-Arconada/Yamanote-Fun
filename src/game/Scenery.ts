@@ -416,6 +416,34 @@ export class Scenery {
     pineFoliage.instanceMatrix.needsUpdate = true
     if (pineFoliage.instanceColor) pineFoliage.instanceColor.needsUpdate = true
     this.scene.add(pineTrunks, pineFoliage)
+
+    // ——— Low scrub: flattened bushes scattered in the band beyond the worn
+    // corridor, denser near the track and thinning out — filler texture that
+    // keeps the mid-ground from reading as bare billiard felt.
+    const scrubCount = 520
+    const scrubMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 })
+    const scrub = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), scrubMat, scrubCount)
+    scrub.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(scrubCount * 3), 3)
+    for (let k = 0; k < scrubCount; k++) {
+      const t = Math.random()
+      const p = this.track.pointAt(t)
+      const tangent = this.track.tangentAt(t)
+      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+      const side = Math.random() < 0.5 ? 1 : -1
+      // Bias density toward the track: sqrt pushes samples inward.
+      const off = 12 + Math.sqrt(Math.random()) * 55
+      const pos = p.clone().addScaledVector(normal, side * off)
+      dummy.position.set(pos.x, 0.1, pos.z)
+      dummy.scale.set(0.5 + Math.random() * 0.9, 0.2 + Math.random() * 0.3, 0.5 + Math.random() * 0.9)
+      dummy.rotation.set(0, Math.random() * Math.PI, 0)
+      dummy.updateMatrix()
+      scrub.setMatrixAt(k, dummy.matrix)
+      tint.setHSL(0.22 + Math.random() * 0.13, 0.3 + Math.random() * 0.18, 0.18 + Math.random() * 0.14)
+      scrub.setColorAt(k, tint)
+    }
+    scrub.instanceMatrix.needsUpdate = true
+    if (scrub.instanceColor) scrub.instanceColor.needsUpdate = true
+    this.scene.add(scrub)
   }
 
   /**
@@ -492,6 +520,16 @@ export class Scenery {
     const roofs = new THREE.InstancedMesh(roofGeo, roofMat, houseCount)
     roofs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
     roofs.castShadow = true
+    // Munefuki ridge cap along every rooftop — the detail that makes a
+    // gabled box read as a Japanese tiled roof.
+    const ridgeCapMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 })
+    const ridgeCaps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), ridgeCapMat, houseCount)
+    ridgeCaps.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
+    // Irregular grass tufts hugging each house's foundation.
+    const tuftMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 })
+    const TUFTS_PER_HOUSE = 4
+    const tufts = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), tuftMat, houseCount * TUFTS_PER_HOUSE)
+    tufts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * TUFTS_PER_HOUSE * 3), 3)
 
     const wallTones = [0xcfc4b0, 0xbfb6a6, 0xd8d2c4, 0xa89c8a, 0xc4b8b0, 0xb0a898]
     const roofTones = [0x3a4453, 0x46424a, 0x54423a, 0x3d4a42, 0x424b58]
@@ -527,21 +565,52 @@ export class Scenery {
         tint.setHex(wallTones[Math.floor(Math.random() * wallTones.length)])
         walls.setColorAt(idx, tint)
 
-        dummy.position.set(pos.x, h, pos.z)
-        dummy.scale.set(w, h * 0.55, d)
+        // Roof sits slightly sunk into the walls (no gap ring at the eaves).
+        const roofScaleY = h * 0.55
+        dummy.position.set(pos.x, h - 0.12, pos.z)
+        dummy.scale.set(w, roofScaleY, d)
         dummy.updateMatrix()
         roofs.setMatrixAt(idx, dummy.matrix)
-        tint.setHex(roofTones[Math.floor(Math.random() * roofTones.length)])
+        const roofTone = roofTones[Math.floor(Math.random() * roofTones.length)]
+        tint.setHex(roofTone)
         roofs.setColorAt(idx, tint)
+
+        // Ridge cap riding the peak, a darker shade of the same tile tone.
+        dummy.position.set(pos.x, h - 0.12 + roofScaleY * 0.5, pos.z)
+        dummy.scale.set(0.5, 0.22, d * 1.27)
+        dummy.updateMatrix()
+        ridgeCaps.setMatrixAt(idx, dummy.matrix)
+        tint.setHex(roofTone).multiplyScalar(0.72)
+        ridgeCaps.setColorAt(idx, tint)
+
+        // Scruffy grass ring at the foundation.
+        for (let g = 0; g < TUFTS_PER_HOUSE; g++) {
+          const ti2 = idx * TUFTS_PER_HOUSE + g
+          const ang = Math.random() * Math.PI * 2
+          const rx = (w / 2 + 0.25) * Math.cos(ang)
+          const rz = (d / 2 + 0.25) * Math.sin(ang)
+          dummy.position.set(pos.x + rx, 0.08, pos.z + rz)
+          dummy.scale.set(0.3 + Math.random() * 0.35, 0.14 + Math.random() * 0.16, 0.3 + Math.random() * 0.35)
+          dummy.rotation.set(0, Math.random() * Math.PI, 0)
+          dummy.updateMatrix()
+          tufts.setMatrixAt(ti2, dummy.matrix)
+          tint.setHSL(0.25 + Math.random() * 0.09, 0.32 + Math.random() * 0.15, 0.2 + Math.random() * 0.12)
+          tufts.setColorAt(ti2, tint)
+        }
         idx++
       }
     }
-    walls.count = roofs.count = idx
+    walls.count = roofs.count = ridgeCaps.count = idx
+    tufts.count = idx * TUFTS_PER_HOUSE
     walls.instanceMatrix.needsUpdate = true
     roofs.instanceMatrix.needsUpdate = true
+    ridgeCaps.instanceMatrix.needsUpdate = true
+    tufts.instanceMatrix.needsUpdate = true
     if (walls.instanceColor) walls.instanceColor.needsUpdate = true
     if (roofs.instanceColor) roofs.instanceColor.needsUpdate = true
-    this.scene.add(walls, roofs)
+    if (ridgeCaps.instanceColor) ridgeCaps.instanceColor.needsUpdate = true
+    if (tufts.instanceColor) tufts.instanceColor.needsUpdate = true
+    this.scene.add(walls, roofs, ridgeCaps, tufts)
   }
 
   /**
