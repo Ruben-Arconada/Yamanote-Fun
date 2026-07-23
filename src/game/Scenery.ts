@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Track } from './Track'
-import { groundHeightAt } from './Track'
+import { groundHeightAt, HILL_STATION_ID, mountainRoadPath } from './Track'
 import type { DayNightCycle } from './DayNightCycle'
 import { STATIONS, type ZoneTier } from '../data/stations'
 import { makeCloudTexture, makeNeonSignTexture, makeWindowGridTexture, makeRoofTileTexture, applyProgressiveWindows } from './signage'
@@ -77,6 +77,8 @@ export class Scenery {
   private cloudMat!: THREE.ShaderMaterial
   private crossingLights: CrossingLights[] = []
   private crossingT = -1
+  /** XZ samples of the mountain road's centerline — houses/trees/scrub use these to keep off the asphalt. */
+  private roadSamples: { x: number; z: number }[] = []
   private sakuraClusters: { x: number; z: number }[] = []
   private petalsMesh: THREE.Points | null = null
   private petalSeeds!: Float32Array
@@ -89,10 +91,12 @@ export class Scenery {
     this.track = track
     this.buildHorizonLandmarks()
     this.buildRainbowBridge()
+    this.buildMountainRoad() // FIRST among the randomized builders: skyline ring, houses and vegetation all keep off the asphalt
     this.buildSkylineRing()
     this.buildVegetation()
     this.buildSakuraPetals()
     this.buildHouseRows()
+    this.buildHillDressing()
     this.buildUtilityPoles()
     this.buildNeonSigns()
     this.buildCrossings()
@@ -213,16 +217,26 @@ export class Scenery {
       // band), so the belt hugs the loop's shape at any LOOP_SCALE instead
       // of relying on hand-tuned ellipse radii.
       const outer = i < outerCount
-      const t = (outer ? i / outerCount : (i - outerCount) / innerCount) + Math.random() * 0.004
-      const p = this.track.pointAt(t)
-      dir.set(p.x, 0, p.z).normalize()
-      const off = (outer ? 1 : -1) * (260 + Math.random() * (outer ? 950 : 700))
-      const x = p.x + dir.x * off + (Math.random() - 0.5) * 200
-      const z = p.z + dir.z * off + (Math.random() - 0.5) * 200
       const h = 45 + Math.random() * 130
       const w = 30 + Math.random() * 45
+      const d = 30 + Math.random() * 45
+      // Resample-not-skip (identity matrices render at the origin): the road's
+      // veer crosses this outer band for its last ~400 units, and these towers
+      // get random yaw — clearance must cover the rotated half-diagonal.
+      let x = 0
+      let z = 0
+      const clearance = 6 + Math.hypot(w, d) / 2
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const t = (outer ? i / outerCount : (i - outerCount) / innerCount) + Math.random() * 0.004
+        const p = this.track.pointAt(t)
+        dir.set(p.x, 0, p.z).normalize()
+        const off = (outer ? 1 : -1) * (260 + Math.random() * (outer ? 950 : 700))
+        x = p.x + dir.x * off + (Math.random() - 0.5) * 200
+        z = p.z + dir.z * off + (Math.random() - 0.5) * 200
+        if (!this.isNearRoad(x, z, clearance)) break
+      }
       dummy.position.set(x, h / 2 - 2, z)
-      dummy.scale.set(w, h, 30 + Math.random() * 45)
+      dummy.scale.set(w, h, d)
       dummy.rotation.set(0, Math.random() * Math.PI, 0)
       dummy.updateMatrix()
       ring.setMatrixAt(i, dummy.matrix)
@@ -421,13 +435,22 @@ export class Scenery {
     pineFoliage.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pineCount * 3), 3)
     pineTrunks.castShadow = pineFoliage.castShadow = true
     for (let k = 0; k < pineCount; k++) {
-      const t = this.sampleTierWeightedT()
-      const p = this.track.pointAt(t)
-      const tangent = this.track.tangentAt(t)
-      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
-      const side = Math.random() < 0.5 ? 1 : -1
-      const off = 14 + Math.random() * 55
-      const pos = p.clone().addScaledVector(normal, side * off)
+      // Resample (never skip: a skipped instance would be an identity matrix
+      // at the world origin) until the pine is off the mountain road.
+      let p = this.track.pointAt(0)
+      let side = 1
+      let off = 14
+      let pos = p.clone()
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const t = this.sampleTierWeightedT()
+        p = this.track.pointAt(t)
+        const tangent = this.track.tangentAt(t)
+        const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+        side = Math.random() < 0.5 ? 1 : -1
+        off = 14 + Math.random() * 55
+        pos = p.clone().addScaledVector(normal, side * off)
+        if (!this.isNearRoad(pos.x, pos.z, 6.5)) break
+      }
       const scale = 0.7 + Math.random() * 0.9
 
       const groundY = groundHeightAt(p.y, side * off)
@@ -458,14 +481,22 @@ export class Scenery {
     const scrub = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), scrubMat, scrubCount)
     scrub.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(scrubCount * 3), 3)
     for (let k = 0; k < scrubCount; k++) {
-      const t = this.sampleTierWeightedT()
-      const p = this.track.pointAt(t)
-      const tangent = this.track.tangentAt(t)
-      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
-      const side = Math.random() < 0.5 ? 1 : -1
-      // Bias density toward the track: sqrt pushes samples inward.
-      const off = 12 + Math.sqrt(Math.random()) * 55
-      const pos = p.clone().addScaledVector(normal, side * off)
+      // Same resample-not-skip rule as the pines (see above).
+      let p = this.track.pointAt(0)
+      let side = 1
+      let off = 12
+      let pos = p.clone()
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const t = this.sampleTierWeightedT()
+        p = this.track.pointAt(t)
+        const tangent = this.track.tangentAt(t)
+        const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+        side = Math.random() < 0.5 ? 1 : -1
+        // Bias density toward the track: sqrt pushes samples inward.
+        off = 12 + Math.sqrt(Math.random()) * 55
+        pos = p.clone().addScaledVector(normal, side * off)
+        if (!this.isNearRoad(pos.x, pos.z, 5.5)) break
+      }
       dummy.position.set(pos.x, groundHeightAt(p.y, side * off) + 0.1, pos.z)
       dummy.scale.set(0.5 + Math.random() * 0.9, 0.2 + Math.random() * 0.3, 0.5 + Math.random() * 0.9)
       dummy.rotation.set(0, Math.random() * Math.PI, 0)
@@ -611,6 +642,7 @@ export class Scenery {
         const side = k % 2 === 0 ? 1 : -1
         const off = 15 + Math.random() * 16
         const pos = p.clone().addScaledVector(normal, side * off)
+        if (this.isNearRoad(pos.x, pos.z, 9)) continue // no houses on the asphalt (covers a 9x9 house's rotated half-diagonal + road half-width)
         const w = 5 + Math.random() * 4
         const h = 3.2 + Math.random() * 2.8
         const d = 5 + Math.random() * 4
@@ -822,6 +854,321 @@ export class Scenery {
     })
   }
 
+  /** t of THE level crossing (0.55 into the Tabata→Komagome stretch) — shared by the crossing itself and the hill walls' gap. */
+  private crossingTFraction(): number {
+    const idx = STATIONS.findIndex((s) => s.id === 'tabata')
+    const markerA = this.track.markerFor(idx).tFraction
+    const markerB = this.track.markerFor((idx + 1) % N).tFraction
+    return markerA + (((markerB - markerA + 1) % 1) || 0.02) * 0.55
+  }
+
+  private isNearRoad(x: number, z: number, radius: number): boolean {
+    const r2 = radius * radius
+    for (const s of this.roadSamples) {
+      const dx = s.x - x
+      const dz = s.z - z
+      if (dx * dx + dz * dz < r2) return true
+    }
+    return false
+  }
+
+  /**
+   * A country road on the approach to the hill: it rides beside the tracks for
+   * a while (driver's left), then bends away toward a small mountain range off
+   * to the west and is gone — a one-glance story of "somewhere else" that the
+   * quiet zone needed. The mountains anchor the road's vanishing point.
+   */
+  private buildMountainRoad() {
+    // Centerline comes from Track so City's background buildings (built from
+    // the same path) can never randomize themselves onto the asphalt.
+    const samples = mountainRoadPath(this.track)
+    const SAMPLES = samples.length - 1
+    const pts: THREE.Vector3[] = []
+    for (const s of samples) {
+      // A clear 10cm over the terrain: a few centimetres proud lost the
+      // z-buffer duel against the ground plane at distance and vanished.
+      pts.push(new THREE.Vector3(s.x, groundHeightAt(s.trackY, s.off) + 0.1, s.z))
+      this.roadSamples.push({ x: s.x, z: s.z })
+    }
+
+    // ——— Asphalt ribbon with a dashed centerline, one dash cycle per texture tile.
+    const asphaltTex = (() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 64
+      canvas.height = 128
+      const ctx = canvas.getContext('2d')!
+      // Lighter than the trackside earth on purpose: same-value asphalt
+      // disappeared into the ground entirely from the cab.
+      ctx.fillStyle = '#5b5e63'
+      ctx.fillRect(0, 0, 64, 128)
+      for (let i = 0; i < 260; i++) {
+        ctx.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)'
+        ctx.fillRect(Math.random() * 64, Math.random() * 128, 1.5, 1.5)
+      }
+      // Japanese country road markings: solid white edge lines, dashed center.
+      ctx.fillStyle = '#e8e6da'
+      ctx.fillRect(3, 0, 3, 128)
+      ctx.fillRect(58, 0, 3, 128)
+      ctx.fillRect(30, 8, 4, 52) // dash; rest of the cycle is gap
+      const tex = new THREE.CanvasTexture(canvas)
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+      return tex
+    })()
+    const HALF_W = 2.8
+    const roadPositions: number[] = []
+    const roadUvs: number[] = []
+    const roadIndices: number[] = []
+    let dist = 0
+    for (let i = 0; i <= SAMPLES; i++) {
+      const prev = pts[Math.max(0, i - 1)]
+      const next = pts[Math.min(SAMPLES, i + 1)]
+      const dir = new THREE.Vector3().subVectors(next, prev)
+      dir.y = 0
+      dir.normalize()
+      const side = new THREE.Vector3(-dir.z, 0, dir.x)
+      if (i > 0) dist += pts[i].distanceTo(pts[i - 1])
+      const c = pts[i]
+      // Taper the first few metres from nothing: a full-width square cut edge
+      // simply popped into existence beside the tracks.
+      const hw = HALF_W * Math.min(1, i / 10)
+      roadPositions.push(
+        c.x + side.x * hw, c.y, c.z + side.z * hw,
+        c.x - side.x * hw, c.y, c.z - side.z * hw,
+      )
+      const v = dist / 11 // one dash cycle every ~11 units
+      roadUvs.push(0, v, 1, v)
+      if (i < SAMPLES) {
+        // Vertex 0 of each pair is the RIGHT edge (opposite of the embankment
+        // ribbon), so the winding flips too — the other order faced the road
+        // at the dirt and backface culling erased it from above.
+        const a = i * 2, b = i * 2 + 1, c2 = (i + 1) * 2, d = (i + 1) * 2 + 1
+        roadIndices.push(a, c2, b, b, c2, d)
+      }
+    }
+    const roadGeo = new THREE.BufferGeometry()
+    roadGeo.setAttribute('position', new THREE.Float32BufferAttribute(roadPositions, 3))
+    roadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(roadUvs, 2))
+    roadGeo.setIndex(roadIndices)
+    roadGeo.computeVertexNormals()
+    const road = new THREE.Mesh(roadGeo, new THREE.MeshStandardMaterial({
+      map: asphaltTex,
+      roughness: 1,
+      // Depth-bias toward the camera so the ribbon never loses to the ground
+      // plane at far z-buffer distances.
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }))
+    road.receiveShadow = true
+    this.scene.add(road)
+
+    // ——— The little mountain range the road runs off to: a handful of low-poly
+    // cones past the plain, hazed by distance fog like the rest of the world.
+    const end = pts[SAMPLES]
+    const endDir = new THREE.Vector3().subVectors(pts[SAMPLES], pts[SAMPLES - 4])
+    endDir.y = 0
+    endDir.normalize()
+    const perp = new THREE.Vector3(-endDir.z, 0, endDir.x)
+    const mountainMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true })
+    const mountains = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 9), mountainMat, 4)
+    mountains.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(4 * 3), 3)
+    // Past the skyline ring on purpose: closer in, its towers sliced straight
+    // through the peaks. Back here the ring reads as a city skyline WITH
+    // mountains behind it, and the extra distance earns the size bump.
+    const specs = [
+      { fwd: 950, side: 60, r: 520, h: 330 },
+      { fwd: 830, side: -420, r: 380, h: 235 },
+      { fwd: 890, side: 400, r: 430, h: 265 },
+      { fwd: 1150, side: -140, r: 470, h: 205 },
+    ]
+    const mDummy = new THREE.Object3D()
+    const mTint = new THREE.Color()
+    specs.forEach((m, i) => {
+      const base = end.clone().addScaledVector(endDir, m.fwd).addScaledVector(perp, m.side)
+      mDummy.position.set(base.x, m.h * 0.5 - 0.5, base.z)
+      mDummy.scale.set(m.r, m.h, m.r)
+      mDummy.rotation.set(0, Math.random() * Math.PI, 0)
+      mDummy.updateMatrix()
+      mountains.setMatrixAt(i, mDummy.matrix)
+      // Dark cool forest-green — distant wooded ranges, not pastel paper.
+      mTint.setHSL(0.39 + Math.random() * 0.03, 0.22, 0.16 + i * 0.02)
+      mountains.setColorAt(i, mTint)
+    })
+    mountains.instanceMatrix.needsUpdate = true
+    if (mountains.instanceColor) mountains.instanceColor.needsUpdate = true
+    this.scene.add(mountains)
+  }
+
+  /**
+   * Dressing for the Komagome climb: ishigaki-style stone retaining walls
+   * hugging the track where the embankment is tall, and a loose garden wood
+   * (pines, broadleaf greens, a few maples) on the flanks — the hill should
+   * read as the gardens the station blurb promises, not a bare mound.
+   */
+  private buildHillDressing() {
+    const hillIdx = STATIONS.findIndex((s) => s.id === HILL_STATION_ID)
+    const center = this.track.markerFor(Math.max(0, hillIdx)).tFraction
+    const len = this.track.getLength()
+    const crossT = this.crossingTFraction()
+
+    // ——— Stone texture shared by every wall segment.
+    const stoneTex = (() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 128
+      canvas.height = 64
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#4a453d'
+      ctx.fillRect(0, 0, 128, 64)
+      const rows = 4
+      for (let r = 0; r < rows; r++) {
+        const y = (r * 64) / rows
+        const shift = (r % 2) * 14
+        for (let x = -1; x < 6; x++) {
+          const w = 20 + ((x * 7 + r * 13) % 9)
+          const px = x * 24 + shift
+          const g = 118 + ((x * 31 + r * 17) % 28)
+          ctx.fillStyle = `rgb(${g},${g - 6},${g - 16})`
+          ctx.fillRect(px + 1, y + 1, w, 64 / rows - 2)
+          if ((x + r) % 5 === 0) {
+            ctx.fillStyle = 'rgba(95,107,70,0.35)' // moss
+            ctx.fillRect(px + 3, y + 64 / rows - 5, w * 0.5, 3)
+          }
+        }
+      }
+      const tex = new THREE.CanvasTexture(canvas)
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.wrapS = THREE.RepeatWrapping
+      tex.repeat.set(3, 1)
+      return tex
+    })()
+
+    const wallMat = new THREE.MeshStandardMaterial({ map: stoneTex, roughness: 0.95 })
+    const SEG = 7.2
+    const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(0.55, 1.5, SEG + 0.35), wallMat, 360)
+    walls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(360 * 3), 3)
+    walls.castShadow = true
+    walls.receiveShadow = true
+    const dummy = new THREE.Object3D()
+    const tint = new THREE.Color()
+    let wi = 0
+    const dtStep = SEG / len
+    for (let t = center - 0.053; t <= center + 0.053; t += dtStep) {
+      const p = this.track.pointAt(t)
+      if (p.y < 3.2) continue // walls only where the embankment is tall enough to retain
+      const arcToCross = Math.abs(t - crossT) * len
+      const arcToStation = Math.abs(t - center) * len
+      if (arcToCross < 15) continue // leave the level crossing's road open
+      if (arcToStation < 46) continue // the platform zone has its own furniture
+      const tangent = this.track.tangentAt(t)
+      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+      for (const side of [1, -1]) {
+        if (wi >= 360) break
+        // 8.35, not deeper out: at 8.6 the wall's outer face passed 3-9cm
+        // through the utility-pole line at lateral 9.
+        const pos = p.clone().addScaledVector(normal, side * 8.35)
+        pos.y = p.y - 0.48 + 0.66 // base on the crown, slightly sunk
+        dummy.position.copy(pos)
+        dummy.lookAt(pos.x + tangent.x, pos.y + tangent.y, pos.z + tangent.z)
+        // Ishigaki batter tips the top TOWARD the fill it retains (trackward).
+        // After lookAt, local X points at -normal, so the trackward tilt needs
+        // the negative sign — the positive one leaned every wall outward, into
+        // the pole line.
+        dummy.rotateZ(-side * 0.08)
+        dummy.updateMatrix()
+        walls.setMatrixAt(wi, dummy.matrix)
+        const shade = 0.88 + Math.random() * 0.18
+        walls.setColorAt(wi, tint.setRGB(shade, shade, shade))
+        wi++
+      }
+    }
+    walls.count = wi
+    walls.instanceMatrix.needsUpdate = true
+    if (walls.instanceColor) walls.instanceColor.needsUpdate = true
+    this.scene.add(walls)
+
+    // ——— Garden wood on the flanks: trunks + layered canopies, some pines,
+    // a few maples for warmth. Everything stands on the shared terrain profile.
+    const TREES = 150
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3527, roughness: 0.95 })
+    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.24, 0.36, 2.4, 6), trunkMat, TREES)
+    const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 })
+    const canopies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 7, 6), canopyMat, TREES * 2)
+    canopies.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(TREES * 2 * 3), 3)
+    const hillPineMat = new THREE.MeshStandardMaterial({ color: 0x2e4a2e, roughness: 0.95 })
+    const hillPines = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 4.6, 7), hillPineMat, Math.ceil(TREES * 0.4))
+    hillPines.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.ceil(TREES * 0.4) * 3), 3)
+    trunks.castShadow = canopies.castShadow = hillPines.castShadow = true
+    let ti = 0
+    let ci = 0
+    let pi = 0
+    for (let k = 0; k < TREES; k++) {
+      let placed: { pos: THREE.Vector3; groundY: number } | null = null
+      for (let attempt = 0; attempt < 6 && !placed; attempt++) {
+        const t = center + (Math.random() * 2 - 1) * 0.052
+        const p = this.track.pointAt(t)
+        const tangent = this.track.tangentAt(t)
+        const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+        const side = Math.random() < 0.5 ? 1 : -1
+        const off = 12 + Math.random() * 50
+        const arcToStation = Math.abs(t - center) * len
+        const arcToCross = Math.abs(t - crossT) * len
+        if (arcToStation < 44 && off < 18) continue // platform zone
+        if (arcToCross < 13 && off < 15) continue // crossing road corridor
+        const pos = p.clone().addScaledVector(normal, side * off)
+        if (this.isNearRoad(pos.x, pos.z, 7)) continue
+        placed = { pos, groundY: groundHeightAt(p.y, side * off) }
+      }
+      if (!placed) continue
+      const { pos, groundY } = placed
+      const scale = 0.75 + Math.random() * 0.8
+      const kind = Math.random()
+      if (kind < 0.3 && pi < hillPines.count) {
+        // Pine: reuse the trackside pine silhouette, denser green.
+        dummy.position.set(pos.x, groundY + 2.3 * scale - 0.1, pos.z)
+        dummy.scale.setScalar(scale)
+        dummy.rotation.set(0, Math.random() * Math.PI, 0)
+        dummy.updateMatrix()
+        hillPines.setMatrixAt(pi, dummy.matrix)
+        tint.setHSL(0.33 + Math.random() * 0.04, 0.35, 0.18 + Math.random() * 0.09)
+        hillPines.setColorAt(pi, tint)
+        pi++
+        continue
+      }
+      dummy.position.set(pos.x, groundY + 1.2 * scale - 0.1, pos.z)
+      dummy.scale.setScalar(scale)
+      dummy.rotation.set(0, Math.random() * Math.PI, 0)
+      dummy.updateMatrix()
+      trunks.setMatrixAt(ti++, dummy.matrix)
+      const maple = kind > 0.82 // a warm handful, Rikugien style
+      for (let b = 0; b < 2; b++) {
+        const br = (1.7 + Math.random() * 1.1) * scale
+        dummy.position.set(
+          pos.x + (Math.random() - 0.5) * 1.6 * scale,
+          groundY + (2.6 + b * 1.1 + Math.random() * 0.5) * scale,
+          pos.z + (Math.random() - 0.5) * 1.6 * scale,
+        )
+        dummy.scale.set(br, br * 0.78, br)
+        dummy.rotation.set(0, 0, 0)
+        dummy.updateMatrix()
+        canopies.setMatrixAt(ci, dummy.matrix)
+        if (maple) tint.setHSL(0.045 + Math.random() * 0.03, 0.62, 0.34 + Math.random() * 0.08)
+        else tint.setHSL(0.28 + Math.random() * 0.08, 0.4, 0.26 + Math.random() * 0.1)
+        canopies.setColorAt(ci, tint)
+        ci++
+      }
+    }
+    trunks.count = ti
+    canopies.count = ci
+    hillPines.count = pi
+    trunks.instanceMatrix.needsUpdate = true
+    canopies.instanceMatrix.needsUpdate = true
+    hillPines.instanceMatrix.needsUpdate = true
+    if (canopies.instanceColor) canopies.instanceColor.needsUpdate = true
+    if (hillPines.instanceColor) hillPines.instanceColor.needsUpdate = true
+    this.scene.add(trunks, canopies, hillPines)
+  }
+
   /**
    * THE level crossing. The real Yamanote famously keeps exactly one —
    * Dai-ni Nakazato, on the Tabata→Komagome stretch; everywhere else the
@@ -854,10 +1201,7 @@ export class Scenery {
     }
     this.crossingLights.push(lights)
 
-    const idx = STATIONS.findIndex((s) => s.id === 'tabata')
-    const markerA = this.track.markerFor(idx).tFraction
-    const markerB = this.track.markerFor((idx + 1) % N).tFraction
-    const t = markerA + (((markerB - markerA + 1) % 1) || 0.02) * 0.55
+    const t = this.crossingTFraction()
     this.crossingT = t
     const p = this.track.pointAt(t)
     const tangent = this.track.tangentAt(t)

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Track } from './Track'
-import { groundHeightAt } from './Track'
+import { groundHeightAt, mountainRoadPath } from './Track'
 import { STATIONS, prevStationIndex, nextStationIndex, type ZoneTier } from '../data/stations'
 import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture, applyProgressiveWindows, LOOP_LINE_COLOR } from './signage'
 
@@ -154,6 +154,19 @@ export class City {
     const counters = new Map<string, number>(THEME_GROUPS.map((t) => [t, 0]))
     const trackLen = this.track.getLength()
     const tintColor = new THREE.Color()
+    // Background buildings randomize per load — without this check, sooner or
+    // later one squats on the mountain road's asphalt.
+    const road = mountainRoadPath(this.track)
+    const blocksRoad = (x: number, z: number, halfSize: number) => {
+      const r = 6 + halfSize
+      const r2 = r * r
+      for (const s of road) {
+        const dx = s.x - x
+        const dz = s.z - z
+        if (dx * dx + dz * dz < r2) return true
+      }
+      return false
+    }
 
     for (let s = 0; s < N; s++) {
       const station = STATIONS[s]
@@ -185,6 +198,10 @@ export class City {
         const depth = 10 + Math.random() * 12
 
         const pos = point.clone().add(normal.clone().multiplyScalar(side * offset))
+        // Half-DIAGONAL, not half-side: buildings get a random yaw below, so a
+        // rotated corner reaches hypot(w,d)/2 — max(w,d)/2 let corners clip
+        // the asphalt on rare seeds.
+        if (blocksRoad(pos.x, pos.z, Math.hypot(width, depth) / 2)) continue
         // Stand on the local ground: pinning the base to y=0 left buildings
         // half-swallowed by the hill (and floating a hair over the plain).
         dummy.position.set(pos.x, groundHeightAt(point.y, side * offset) + height / 2, pos.z)

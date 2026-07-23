@@ -17,26 +17,40 @@ export class Track {
   readonly curve: THREE.CatmullRomCurve3
   readonly stationMarkers: StationMarker[]
   private readonly length: number
+  private readonly hillCenter: number
 
   constructor() {
     this.curve = buildLoopCurve()
     this.curve.arcLengthDivisions = 4000
     this.length = this.curve.getLength()
     this.stationMarkers = buildStationMarkers()
+    this.hillCenter = hillCenterFraction()
   }
 
   getLength(): number {
     return this.length
   }
 
+  // The hill is applied HERE, analytically, not baked into the spline's
+  // control points. Baked-in, Catmull-Rom interpolation rang below zero on
+  // the flat approaches (undershoot dips of ~0.6 units just before and after
+  // the climb) and the flat ground plane at -0.5 swallowed the sleepers
+  // there. The analytic profile is exactly zero outside its window, so the
+  // approaches cannot dip by construction.
   pointAt(tFraction: number, target = new THREE.Vector3()): THREE.Vector3 {
     const t = THREE.MathUtils.euclideanModulo(tFraction, 1)
-    return this.curve.getPointAt(t, target)
+    this.curve.getPointAt(t, target)
+    target.y += hillHeight(t, this.hillCenter)
+    return target
   }
 
   tangentAt(tFraction: number, target = new THREE.Vector3()): THREE.Vector3 {
     const t = THREE.MathUtils.euclideanModulo(tFraction, 1)
-    return this.curve.getTangentAt(t, target)
+    this.curve.getTangentAt(t, target)
+    // The flat spline's tangent has y=0; the grade is the analytic profile's
+    // slope converted from per-loop-fraction to per-arc-unit.
+    target.y = hillGrade(t, this.hillCenter) / this.length
+    return target.normalize()
   }
 
   markerFor(stationIndex: number): StationMarker {
@@ -143,19 +157,79 @@ function hillCenterFraction(): number {
   return cum / TOTAL_LOOP_KM
 }
 
+// ── The mountain road ────────────────────────────────────────────────────────
+// Centerline of the country road on the hill approach: parallel to the tracks
+// on the driver's left, then it eases away toward the mountain range and is
+// gone. Computed HERE so both its builder (Scenery) and everything that must
+// keep off the asphalt (Scenery's houses/trees, City's background buildings)
+// share the exact same path.
+export interface RoadSample {
+  x: number
+  z: number
+  /** Track height at this sample's t — feeds groundHeightAt for the road's y. */
+  trackY: number
+  /** Signed lateral offset from the track centerline (negative = driver's left). */
+  off: number
+}
+
+export function mountainRoadPath(track: Track): RoadSample[] {
+  const center = hillCenterFraction()
+  // Window chosen to clear every left-side platform: Nippori and Nishi-Nippori
+  // (markers ~center-0.086 / ~center-0.068) both have doorSide 'left' — the
+  // road's side — and an earlier window ran the asphalt flush along both
+  // platforms, its cut edge popping in mid-station. Starting past
+  // Nishi-Nippori's platform leaves only Tabata and Komagome in range, whose
+  // platforms sit on the RIGHT side of the tracks.
+  const t0 = center - 0.0615
+  const tVeer = center - 0.044
+  const t1 = center - 0.016
+  const SAMPLES = 220
+  const samples: RoadSample[] = []
+  const p = new THREE.Vector3()
+  const tangent = new THREE.Vector3()
+  for (let i = 0; i <= SAMPLES; i++) {
+    const s = i / SAMPLES
+    const t = t0 + (t1 - t0) * s
+    track.pointAt(t, p)
+    track.tangentAt(t, tangent)
+    const nx = -tangent.z
+    const nz = tangent.x
+    const invLen = 1 / Math.hypot(nx, nz)
+    const veerRaw = THREE.MathUtils.clamp((t - tVeer) / (t1 - tVeer), 0, 1)
+    const veer = veerRaw * veerRaw * (3 - 2 * veerRaw) // smoothstep ease
+    const off = -(17 + Math.pow(veer, 1.35) * 640)
+    samples.push({ x: p.x + nx * invLen * off, z: p.z + nz * invLen * off, trackY: p.y, off })
+  }
+  return samples
+}
+
+/** Signed shortest distance from `fraction` to `center` around the closed loop, in [-0.5, 0.5). */
+function wrappedDelta(fraction: number, center: number): number {
+  let d = fraction - center
+  d -= Math.round(d)
+  return d
+}
+
 /** Smooth raised-cosine hill height at a given arc-length fraction of the loop. */
 function hillHeight(fraction: number, center: number): number {
-  let d = Math.abs(fraction - center)
-  d = Math.min(d, 1 - d) // shortest way round the closed loop
+  const d = Math.abs(wrappedDelta(fraction, center))
   if (d >= HILL_HALF_WIDTH) return 0
   return HILL_PEAK * 0.5 * (1 + Math.cos((Math.PI * d) / HILL_HALF_WIDTH))
 }
 
+/** d(hillHeight)/d(fraction): positive while climbing toward the crest, negative past it. */
+function hillGrade(fraction: number, center: number): number {
+  const d = wrappedDelta(fraction, center)
+  const a = Math.abs(d)
+  if (a >= HILL_HALF_WIDTH) return 0
+  const slopeOnA = -HILL_PEAK * 0.5 * (Math.PI / HILL_HALF_WIDTH) * Math.sin((Math.PI * a) / HILL_HALF_WIDTH)
+  // Before the crest (d < 0) height grows with fraction, so flip the |d|-slope's sign.
+  return d < 0 ? -slopeOnA : slopeOnA
+}
+
 function buildLoopCurve(): THREE.CatmullRomCurve3 {
+  const points: THREE.Vector3[] = []
   const N = 64
-  // First pass: the flat stadium silhouette (x, z only).
-  const xs: number[] = []
-  const zs: number[] = []
   for (let i = 0; i < N; i++) {
     const a = (i / N) * Math.PI * 2
     // Elongated N-S "stadium" shape with gentle irregularity so it doesn't
@@ -163,26 +237,12 @@ function buildLoopCurve(): THREE.CatmullRomCurve3 {
     const rx = (420 + Math.sin(a * 2 + 0.6) * 55 + Math.sin(a * 5) * 12) * LOOP_SCALE
     const rz = (640 + Math.cos(a * 3) * 45) * LOOP_SCALE
     const squash = 0.82 + 0.18 * Math.pow(Math.abs(Math.sin(a * 0.5)), 1.5)
-    xs.push(Math.sin(a) * rx)
-    zs.push(-Math.cos(a) * rz * squash)
-  }
-
-  // Second pass: approximate each point's arc-length fraction from cumulative
-  // chord length, so the hill lands where a station sits (markers use the same
-  // arc fraction). Then lift each point by the hill profile.
-  const chord: number[] = [0]
-  for (let i = 1; i <= N; i++) {
-    const j = i % N
-    const k = i - 1
-    chord.push(chord[k] + Math.hypot(xs[j] - xs[k], zs[j] - zs[k]))
-  }
-  const total = chord[N]
-  const center = hillCenterFraction()
-
-  const points: THREE.Vector3[] = []
-  for (let i = 0; i < N; i++) {
-    const frac = chord[i] / total
-    points.push(new THREE.Vector3(xs[i], hillHeight(frac, center), zs[i]))
+    const x = Math.sin(a) * rx
+    const z = -Math.cos(a) * rz * squash
+    // Deliberately flat: the hill is added analytically in Track.pointAt /
+    // tangentAt. Baking it into these control points made the spline ring
+    // below ground on the approaches (see Track.pointAt).
+    points.push(new THREE.Vector3(x, 0, z))
   }
   return new THREE.CatmullRomCurve3(points, true, 'catmullrom', 0.4)
 }
