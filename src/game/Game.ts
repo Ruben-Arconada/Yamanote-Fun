@@ -418,9 +418,18 @@ export class Game {
     const embLateral = [-(EMB_CROWN + EMB_SKIRT), -EMB_CROWN, EMB_CROWN, EMB_CROWN + EMB_SKIRT]
     const embPositions: number[] = []
     const embColors: number[] = []
-    const groundCol = new THREE.Color(0x8f897c)
-    const grassCol = new THREE.Color(0x6f8a4c)
+    const embUvs: number[] = []
+    // Neutral white on the flat so the ribbon shows the ground texture at the
+    // exact brightness the ground plane does (any tint here darkened the whole
+    // trackside into a visibly different band); greens up only as the land rises.
+    const groundCol = new THREE.Color(0xffffff)
+    const grassCol = new THREE.Color(0x93c46b)
     const embCol = new THREE.Color()
+    // Same texel density as the ground plane (14000 wide at repeat 56 = one
+    // tile per 250 units), so the ribbon's detail matches the terrain it sits
+    // in instead of reading as a bare untextured shape.
+    const EMB_TILE = 250
+    const embTrackLen = this.track.getLength()
     for (let i = 0; i <= segments; i++) {
       const t = i / segments
       const p = this.track.pointAt(t)
@@ -434,26 +443,40 @@ export class Game {
         embPositions.push(pos.x, y, pos.z)
         embCol.copy(groundCol).lerp(grassCol, crown ? climb : climb * 0.6)
         embColors.push(embCol.r, embCol.g, embCol.b)
+        embUvs.push(embLateral[k] / EMB_TILE, (t * embTrackLen) / EMB_TILE)
       }
     }
+    // Winding matters: with the lateral axis running along the track normal and
+    // the strip advancing along the tangent, the naive order produces DOWNWARD
+    // face normals — the whole hill renders inside-out and vanishes through
+    // backface culling. This order keeps the surface facing the sky.
     const embIndices: number[] = []
     for (let i = 0; i < segments; i++) {
       const base = i * 4
       const next = (i + 1) * 4
       for (let k = 0; k < 3; k++) {
         const a = base + k, b = base + k + 1, c = next + k, d = next + k + 1
-        embIndices.push(a, c, b, b, c, d)
+        embIndices.push(a, b, c, b, d, c)
       }
     }
     const embGeo = new THREE.BufferGeometry()
     embGeo.setAttribute('position', new THREE.Float32BufferAttribute(embPositions, 3))
     embGeo.setAttribute('color', new THREE.Float32BufferAttribute(embColors, 3))
+    embGeo.setAttribute('uv', new THREE.Float32BufferAttribute(embUvs, 2))
     embGeo.setIndex(embIndices)
     embGeo.computeVertexNormals()
-    const embMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 })
+    const embTex = makeGroundTexture()
+    embTex.wrapS = embTex.wrapT = THREE.RepeatWrapping
+    const embMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: embTex,
+      vertexColors: true,
+      roughness: 1,
+    })
     const embankment = new THREE.Mesh(embGeo, embMat)
     embankment.receiveShadow = true
-    embankment.castShadow = true
+    // No castShadow: a ribbon this large self-shadows into acne across the
+    // slope, and the ground plane it blends into doesn't cast either.
     this.scene.add(embankment)
 
     // Worn corridor beside the rails: a wider, alpha-edged band of beaten
