@@ -104,7 +104,7 @@ export class Scenery {
    * soft rainbow illumination after dark. The bay district's own landmark.
    */
   private buildRainbowBridge() {
-    const base = this.outwardFrom('takanawa-gateway', 620)
+    const base = this.outwardFrom('takanawa', 620)
     const g = new THREE.Group()
     g.position.copy(base)
     // Face the bridge roughly along the shoreline (perpendicular to outward).

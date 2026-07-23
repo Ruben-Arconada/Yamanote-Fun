@@ -28,14 +28,18 @@ export function makeScuffedPanelTexture(base = '#1c1f26'): THREE.CanvasTexture {
   return tex
 }
 
-/** JR Yamanote Line's official platform-sign color ("uguisu-iro"), the same on all 30 stations. */
-export const YAMANOTE_LINE_COLOR = 0x8fc31f
+/**
+ * Tokyo Loop's signature green. A nod to the warbler-green tradition of
+ * Tokyo's loop line — color alone is not protectable, and this is our own
+ * palette pick, used consistently across signage, HUD and branding.
+ */
+export const LOOP_LINE_COLOR = 0x8fc31f
 
 export interface StationSignOptions {
   nameEn: string
   nameJa: string
   nameKana: string
-  /** e.g. "JY01" */
+  /** e.g. "TL01" */
   code: string
   prevNameEn: string
   nextNameEn: string
@@ -73,7 +77,7 @@ export function makeStationSignTexture(opts: StationSignOptions): THREE.CanvasTe
   canvas.width = W
   canvas.height = H
   const ctx = canvas.getContext('2d')!
-  const lineHex = '#' + YAMANOTE_LINE_COLOR.toString(16).padStart(6, '0')
+  const lineHex = '#' + LOOP_LINE_COLOR.toString(16).padStart(6, '0')
 
   ctx.fillStyle = '#f5f3ec'
   ctx.fillRect(0, 0, W, H)

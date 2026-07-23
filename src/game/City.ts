@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Track } from './Track'
 import { STATIONS, prevStationIndex, nextStationIndex } from '../data/stations'
-import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture, applyProgressiveWindows, YAMANOTE_LINE_COLOR } from './signage'
+import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture, applyProgressiveWindows, LOOP_LINE_COLOR } from './signage'
 
 const THEME_GROUPS = ['business', 'downtown', 'shitamachi', 'green', 'youth', 'bay'] as const
 const N = STATIONS.length
@@ -299,7 +299,7 @@ export class City {
       const ctx = canvas.getContext('2d')!
       ctx.fillStyle = '#f4f2ea'
       ctx.fillRect(0, 0, 128, 48)
-      ctx.fillStyle = '#' + YAMANOTE_LINE_COLOR.toString(16).padStart(6, '0')
+      ctx.fillStyle = '#' + LOOP_LINE_COLOR.toString(16).padStart(6, '0')
       ctx.fillRect(0, 38, 128, 10)
       ctx.fillStyle = '#222'
       ctx.font = '700 20px "Hiragino Sans", sans-serif'
@@ -432,7 +432,7 @@ export class City {
         nameEn: station.nameEn,
         nameJa: station.nameJa,
         nameKana: station.nameKana,
-        code: `JY${String(s + 1).padStart(2, '0')}`,
+        code: `TL${String(s + 1).padStart(2, '0')}`,
         prevNameEn: prev.nameEn,
         nextNameEn: next.nameEn,
       })

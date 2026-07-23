@@ -1,8 +1,8 @@
-// Minimal offline-capable service worker for Yamanote Fun.
+// Minimal offline-capable service worker for Tokyo Loop.
 // Strategy: network-first for navigations (so deploys land immediately),
 // stale-while-revalidate for same-origin assets (hashed by Vite, so a cached
 // asset is always the right version for the page that requested it).
-const CACHE = 'yamanote-fun-v1'
+const CACHE = 'tokyo-loop-v1'
 
 self.addEventListener('install', () => {
   self.skipWaiting()

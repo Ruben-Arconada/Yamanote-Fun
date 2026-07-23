@@ -1,7 +1,7 @@
 {
-  "name": "Yamanote Fun — 山手線 Driver",
-  "short_name": "Yamanote Fun",
-  "description": "Conduce la línea Yamanote por un Tokio en 3D: ciclo día/noche, melodías de estación y parada de precisión.",
+  "name": "Tokyo Loop — 東京ループ Driver",
+  "short_name": "Tokyo Loop",
+  "description": "Conduce la línea circular de Tokio en 3D: ciclo día/noche, melodías de estación y parada de precisión. Juego de fans, sin afiliación con ninguna compañía ferroviaria.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",

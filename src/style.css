@@ -193,8 +193,8 @@ canvas.game-canvas {
 .hud-station-now-name, .hud-station-next-name { font-size: 14px; font-weight: 600; opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity 0.2s ease; }
 .hud-station-now { border-color: rgba(120, 200, 255, 0.4); }
 
-/* JR-style line map: the uguisu-green Yamanote band with round station
-   "eki" markers riding on it, like the in-train route diagrams. */
+/* Route map: Tokyo Loop's green band with round station markers riding on
+   it, in the spirit of in-train route diagrams. */
 .line-diagram {
   position: absolute;
   top: calc(var(--safe-top) + 58px);
@@ -239,8 +239,15 @@ canvas.game-canvas {
 .line-dot.current { background: #ffce4a; box-shadow: 0 0 8px #ffce4a; transform: scale(1.45); border-color: #fff; }
 .line-dot.next { background: #6bd4ff; transform: scale(1.25); border-color: #fff; }
 
-/* JY station-number badge, straight off the platform signage. */
-.jy-badge {
+.disclaimer {
+  margin-top: 14px;
+  font-size: 10px;
+  line-height: 1.5;
+  opacity: 0.55;
+}
+
+/* "TL" station-number badge — Tokyo Loop's own numbering, not any operator's. */
+.tl-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;

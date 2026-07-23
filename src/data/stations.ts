@@ -65,7 +65,9 @@ export const STATIONS: StationDef[] = [
   { id: 'gotanda', nameEn: 'Gotanda', nameJa: '五反田', nameKana: 'ごたんだ', distanceToNextKm: 1.6, landmark: false, theme: THEMES.business, blurb: 'Oficinas silenciosas junto al río Meguro.', doorSide: 'left' },
   { id: 'osaki', nameEn: 'Osaki', nameJa: '大崎', nameKana: 'おおさき', distanceToNextKm: 0.9, landmark: false, theme: THEMES.business, blurb: 'Torres de cristal donde antes hubo fábricas.', doorSide: 'left' },
   { id: 'shinagawa', nameEn: 'Shinagawa', nameJa: '品川', nameKana: 'しながわ', distanceToNextKm: 1.6, landmark: true, theme: THEMES.bay, blurb: 'Puerta hacia la bahía y el Shinkansen.', doorSide: 'right', transferLines: ['Shinkansen', 'Keikyu Main Line', 'Tokaido Line', 'Yokosuka Line'] },
-  { id: 'takanawa-gateway', nameEn: 'Takanawa Gateway', nameJa: '高輪ゲートウェイ', nameKana: 'たかなわゲートウェイ', distanceToNextKm: 1.3, landmark: false, theme: THEMES.bay, blurb: 'La estación más joven de la línea, toda cristal y madera.', doorSide: 'right' },
+  // "Takanawa Gateway" is a registered JR East trademark (reg. 6206454) —
+  // the plain district toponym is used instead, like the other 29 stops.
+  { id: 'takanawa', nameEn: 'Takanawa', nameJa: '高輪', nameKana: 'たかなわ', distanceToNextKm: 1.3, landmark: false, theme: THEMES.bay, blurb: 'La estación más joven de la línea, toda cristal y madera.', doorSide: 'right' },
   { id: 'tamachi', nameEn: 'Tamachi', nameJa: '田町', nameKana: 'たまち', distanceToNextKm: 1.5, landmark: false, theme: THEMES.business, blurb: 'Oficinas frente a la bahía de Tokio.', doorSide: 'left' },
   { id: 'hamamatsucho', nameEn: 'Hamamatsucho', nameJa: '浜松町', nameKana: 'はままつちょう', distanceToNextKm: 1.2, landmark: false, theme: THEMES.bay, blurb: 'La torre de Tokio se asoma entre los edificios.', doorSide: 'right' },
   { id: 'shimbashi', nameEn: 'Shimbashi', nameJa: '新橋', nameKana: 'しんばし', distanceToNextKm: 1.1, landmark: false, theme: THEMES.business, blurb: 'El bar bajo las vías donde los oficinistas brindan al salir.', doorSide: 'left' },
