@@ -465,7 +465,13 @@ export class City {
     this.lampMaterials.push(lampMat)
   }
 
-  private addLandmarkProps(id: string, group: THREE.Group, accent: number) {
+  private addLandmarkProps(id: string, stationGroup: THREE.Group, accent: number) {
+    // Landmark props stand on the GROUND plane (y=-0.5 world), not at track
+    // height like the platforms — and slightly sunk (-0.58) so no base ever
+    // shows a shadow gap. Station groups sit at track level, hence the wrapper.
+    const group = new THREE.Group()
+    group.position.y = -0.58
+    stationGroup.add(group)
     switch (id) {
       case 'tokyo': {
         // Set fully to one side of the line — centered on local x=0 it sat
@@ -574,11 +580,12 @@ export class City {
         // x=0, where the rails run.
         const shopXs = [-60, -38, -18, 20, 42]
         for (let i = 0; i < shopXs.length; i++) {
+          const shopH = 8 + Math.random() * 6
           const shop = new THREE.Mesh(
-            new THREE.BoxGeometry(8, 8 + Math.random() * 6, 8),
+            new THREE.BoxGeometry(8, shopH, 8),
             new THREE.MeshStandardMaterial({ color: [0xff5da2, 0xffc857, 0x5ad1e0, 0x8fce6a][i % 4], emissive: 0x111111, emissiveIntensity: 0 }),
           )
-          shop.position.set(shopXs[i], 5, -55)
+          shop.position.set(shopXs[i], shopH / 2, -55)
           this.nightGlowMaterials.push(shop.material as THREE.MeshStandardMaterial)
           group.add(shop)
         }
@@ -609,7 +616,9 @@ export class City {
           new THREE.MeshStandardMaterial({ color: 0x1f5a78, roughness: 0.2, metalness: 0.3 }),
         )
         bay.rotation.x = -Math.PI / 2
-        bay.position.set(90, -0.4, 0)
+        // Water surface stays just above the ground plane despite the
+        // wrapper's -0.58 burial offset.
+        bay.position.set(90, 0.18, 0)
         group.add(bay)
         break
       }

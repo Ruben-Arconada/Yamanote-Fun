@@ -414,9 +414,9 @@ export class Game {
     const wireHeight = 6.6
 
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x3a3f45, metalness: 0.5, roughness: 0.5 })
-    // Shafts run 0.5 longer so their feet reach the ground plane at -0.5
-    // instead of hovering at track height.
-    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.14, 0.16, poleHeight + 0.5, 8), poleMat, poleCount)
+    // Shafts run longer so their feet sink just below the ground plane
+    // (-0.58) instead of hovering at track height.
+    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.14, 0.16, poleHeight + 0.58, 8), poleMat, poleCount)
     poles.castShadow = true
     const arms = new THREE.InstancedMesh(new THREE.BoxGeometry(armLength, 0.1, 0.1), poleMat, poleCount)
 
@@ -428,7 +428,7 @@ export class Game {
       const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
       const base = p.clone().addScaledVector(normal, poleOffset)
 
-      dummy.position.set(base.x, base.y + (poleHeight - 0.5) / 2, base.z)
+      dummy.position.set(base.x, base.y + (poleHeight - 0.58) / 2, base.z)
       dummy.rotation.set(0, 0, 0)
       dummy.updateMatrix()
       poles.setMatrixAt(i, dummy.matrix)

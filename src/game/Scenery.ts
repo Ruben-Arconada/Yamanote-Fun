@@ -107,6 +107,7 @@ export class Scenery {
     const base = this.outwardFrom('takanawa', 620)
     const g = new THREE.Group()
     g.position.copy(base)
+    g.position.y = -0.58 // tower feet buried under the ground plane
     // Face the bridge roughly along the shoreline (perpendicular to outward).
     g.rotation.y = Math.atan2(base.x, base.z) + Math.PI / 2
 
@@ -268,6 +269,7 @@ export class Scenery {
     const towerBase = this.outwardFrom('hamamatsucho', -420)
     const tower = new THREE.Group()
     tower.position.copy(towerBase)
+    tower.position.y = -0.58 // feet buried just under the ground plane
     const legSpread = 42
     for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 4.5, 120, 6), this.towerGlowMat)
@@ -295,6 +297,7 @@ export class Scenery {
     const skytreeBase = this.outwardFrom('nippori', 950).add(new THREE.Vector3(-300, 0, -700))
     const skytree = new THREE.Group()
     skytree.position.copy(skytreeBase)
+    skytree.position.y = -0.58
     const st1 = new THREE.Mesh(new THREE.CylinderGeometry(9, 22, 260, 8), this.skytreeGlowMat)
     st1.position.y = 130
     skytree.add(st1)
@@ -350,7 +353,7 @@ export class Scenery {
         sumX += pos.x
         sumZ += pos.z
 
-        dummy.position.set(pos.x, 1.6 * scale - 0.5, pos.z)
+        dummy.position.set(pos.x, 1.6 * scale - 0.58, pos.z)
         dummy.scale.setScalar(scale)
         dummy.rotation.set(0, Math.random() * Math.PI, 0)
         dummy.updateMatrix()
@@ -399,7 +402,7 @@ export class Scenery {
       const pos = p.clone().addScaledVector(normal, side * off)
       const scale = 0.7 + Math.random() * 0.9
 
-      dummy.position.set(pos.x, 1.3 * scale - 0.5, pos.z)
+      dummy.position.set(pos.x, 1.3 * scale - 0.58, pos.z)
       dummy.scale.setScalar(scale)
       dummy.rotation.set(0, 0, 0)
       dummy.updateMatrix()
@@ -575,9 +578,9 @@ export class Scenery {
         const d = 5 + Math.random() * 4
         const yaw = Math.atan2(tangent.x, tangent.z) + (Math.random() - 0.5) * 0.3
 
-        // Feet on the ACTUAL ground plane (y = -0.5): standing on y = 0 left
-        // every house hovering half a meter with its shadow detached below.
-        const GROUND_Y = -0.5
+        // Feet BURIED slightly under the ground plane (y = -0.5): flush bases
+        // still show hairline shadow gaps at grazing angles, sunk ones never do.
+        const GROUND_Y = -0.56
         dummy.position.set(pos.x, GROUND_Y + h / 2, pos.z)
         dummy.scale.set(w, h, d)
         dummy.rotation.set(0, yaw, 0)
@@ -658,8 +661,8 @@ export class Scenery {
     const poleH = 8.4
 
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x5c554c, roughness: 0.9 })
-    // 0.5 longer so the feet stand on the ground plane, not at track height.
-    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.16, poleH + 0.5, 6), poleMat, count)
+    // Long enough that the feet sink just below the ground plane (-0.58).
+    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.16, poleH + 0.58, 6), poleMat, count)
     const arms = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 0.09, 0.09), poleMat, count * 2)
     poles.castShadow = true
 
@@ -671,7 +674,7 @@ export class Scenery {
       const tangent = this.track.tangentAt(t)
       const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
       const base = p.clone().addScaledVector(normal, offset)
-      dummy.position.set(base.x, base.y + (poleH - 0.5) / 2, base.z)
+      dummy.position.set(base.x, base.y + (poleH - 0.58) / 2, base.z)
       dummy.rotation.set(0, Math.atan2(tangent.x, tangent.z), 0)
       dummy.updateMatrix()
       poles.setMatrixAt(i, dummy.matrix)
