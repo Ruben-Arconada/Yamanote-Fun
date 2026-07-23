@@ -93,6 +93,7 @@ export class Scenery {
     this.buildRainbowBridge()
     this.buildMountainRoad() // FIRST among the randomized builders: skyline ring, houses and vegetation all keep off the asphalt
     this.buildSkylineRing()
+    this.buildDistantRanges()
     this.buildVegetation()
     this.buildSakuraPetals()
     this.buildHouseRows()
@@ -249,6 +250,57 @@ export class Scenery {
     this.scene.add(ring)
   }
 
+  /**
+   * Distant mountain ranges past the skyline belt — procedural, fog-hazed,
+   * clustered ridges instead of a flat empty horizon. Deliberately procedural
+   * rather than a painted backdrop: a static image only matches ONE hour of
+   * the day/night cycle, while real geometry inherits fog and light for free.
+   * Two arcs stay clear: the bay stretch (future sea) and the hill stretch
+   * (its own range already stands there, tied to the mountain road).
+   */
+  private buildDistantRanges() {
+    const CLUSTERS = 8
+    const PEAKS_MAX = CLUSTERS * 3
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true })
+    const peaks = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 9), mat, PEAKS_MAX)
+    peaks.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(PEAKS_MAX * 3), 3)
+    const dummy = new THREE.Object3D()
+    const tint = new THREE.Color()
+    const dir = new THREE.Vector3()
+    let pi = 0
+    for (let c = 0; c < CLUSTERS; c++) {
+      const t = c / CLUSTERS + (Math.random() - 0.5) * 0.04
+      const tt = ((t % 1) + 1) % 1
+      if (tt > 0.70 && tt < 0.95) continue // bay arc: keep the horizon open for the sea
+      if (tt > 0.19 && tt < 0.31) continue // hill arc: the road's own range lives here
+      const p = this.track.pointAt(tt)
+      dir.set(p.x, 0, p.z).normalize()
+      const peaksHere = 2 + Math.floor(Math.random() * 2)
+      for (let k = 0; k < peaksHere && pi < PEAKS_MAX; k++) {
+        const out = 1600 + Math.random() * 900
+        const alongJitter = (Math.random() - 0.5) * 700
+        const side = new THREE.Vector3(-dir.z, 0, dir.x)
+        const base = new THREE.Vector3(p.x, 0, p.z)
+          .addScaledVector(dir, out)
+          .addScaledVector(side, alongJitter)
+        const h = 200 + Math.random() * 230
+        const r = 420 + Math.random() * 380
+        dummy.position.set(base.x, h * 0.5 - 0.5, base.z)
+        dummy.scale.set(r, h, r)
+        dummy.rotation.set(0, Math.random() * Math.PI, 0)
+        dummy.updateMatrix()
+        peaks.setMatrixAt(pi, dummy.matrix)
+        tint.setHSL(0.4 + Math.random() * 0.04, 0.2, 0.16 + Math.random() * 0.06)
+        peaks.setColorAt(pi, tint)
+        pi++
+      }
+    }
+    peaks.count = pi
+    peaks.instanceMatrix.needsUpdate = true
+    if (peaks.instanceColor) peaks.instanceColor.needsUpdate = true
+    this.scene.add(peaks)
+  }
+
   /** Loop-center-relative outward placement: from a station's track point, step away from the loop center. */
   private outwardFrom(stationId: string, distance: number, y = 0): THREE.Vector3 {
     const idx = STATIONS.findIndex((s) => s.id === stationId)
@@ -289,15 +341,45 @@ export class Scenery {
     // hill beside the tracks.
     this.fujiBodyMat = new THREE.MeshBasicMaterial({ color: 0x5a6b8a, fog: false })
     this.fujiSnowMat = new THREE.MeshBasicMaterial({ color: 0xe8edf5, fog: false })
-    const fuji = new THREE.Mesh(new THREE.ConeGeometry(1550, 760, 48, 1, true), this.fujiBodyMat)
-    const fujiPos = new THREE.Vector3(-3650, 310, 2600)
+    // Concave shield profile: exponent > 1 pulls the mid-slopes IN (slender
+    // summit flanks flaring into a wide skirt). The first attempt used 0.7,
+    // which bulges the other way and turned the mountain into a giant dome.
+    const FUJI_R = 1750
+    const FUJI_H = 780
+    const fujiProfile = (h01: number) => Math.pow(1 - h01, 1.45)
+    const bodyPts: THREE.Vector2[] = []
+    for (let i = 0; i <= 24; i++) {
+      const h = i / 24
+      bodyPts.push(new THREE.Vector2(Math.max(0.001, fujiProfile(h)) * FUJI_R, h * FUJI_H))
+    }
+    const fuji = new THREE.Mesh(new THREE.LatheGeometry(bodyPts, 48), this.fujiBodyMat)
+    const fujiPos = new THREE.Vector3(-3650, -60, 2600) // base sunk under the plain
     fuji.position.copy(fujiPos)
     this.scene.add(fuji)
-    // Snow cap: slightly WIDER slope than the body and a hair taller, so its
-    // surface sits strictly proud of the mountain — same-slope cones sharing
-    // the apex were perfectly coplanar and shimmered with z-fighting.
-    const snow = new THREE.Mesh(new THREE.ConeGeometry(1550 * 0.365, 760 * 0.34, 48, 1, false), this.fujiSnowMat)
-    snow.position.set(fujiPos.x, fujiPos.y + 760 * 0.335, fujiPos.z)
+    // Snow cap: same profile pushed 4% proud (coplanar cones shimmered), only
+    // the top ~30%, and with a JAGGED lower edge — vertices near the snowline
+    // wobble with the angle so it reads as fingers of snow, not a clean ring.
+    const SNOW_FROM = 0.55
+    const snowPts: THREE.Vector2[] = []
+    for (let i = 0; i <= 12; i++) {
+      const h = SNOW_FROM + (i / 12) * (1 - SNOW_FROM)
+      snowPts.push(new THREE.Vector2(Math.max(0.001, fujiProfile(h)) * FUJI_R * 1.04, h * FUJI_H))
+    }
+    const snowGeo = new THREE.LatheGeometry(snowPts, 48)
+    const sp = snowGeo.attributes.position
+    const snowBaseY = SNOW_FROM * FUJI_H
+    for (let i = 0; i < sp.count; i++) {
+      const y = sp.getY(i)
+      const fall = 1 - Math.min(1, (y - snowBaseY) / (FUJI_H * 0.12))
+      if (fall <= 0) continue
+      const a = Math.atan2(sp.getZ(i), sp.getX(i))
+      // Biased downward: snow fingers hang below the ring line, they don't rise.
+      const wobble = ((Math.sin(a * 7) * 0.6 + Math.sin(a * 13 + 1.7) * 0.4) - 0.55) * FUJI_H * 0.05
+      sp.setY(i, y + wobble * fall)
+    }
+    snowGeo.computeVertexNormals()
+    const snow = new THREE.Mesh(snowGeo, this.fujiSnowMat)
+    snow.position.copy(fujiPos)
     this.scene.add(snow)
 
     // ——— Tokyo Tower near Hamamatsucho: red/white banded lattice silhouette.
@@ -1380,8 +1462,10 @@ export class Scenery {
     // Fuji sits against the sky: tint toward the horizon color by day, nearly
     // silhouette-black at night, warm at dawn/dusk automatically because the
     // horizon color itself warms.
-    this.fujiBodyMat.color.copy(horizon).lerp(FUJI_TINT, 0.62).multiplyScalar(1 - night * 0.55)
-    this.fujiSnowMat.color.copy(SNOW_TINT).lerp(horizon, 0.35).multiplyScalar(1 - night * 0.5)
+    // 0.62 → 0.74 body / 0.35 → 0.48 snow-toward-horizon: at the old weights
+    // the whole mountain washed out into a pale ghost by day.
+    this.fujiBodyMat.color.copy(horizon).lerp(FUJI_TINT, 0.74).multiplyScalar(1 - night * 0.55)
+    this.fujiSnowMat.color.copy(SNOW_TINT).lerp(horizon, 0.48).multiplyScalar(1 - night * 0.5)
 
     // Landmark illumination fades in with dusk; by day their base color leans
     // toward the horizon so the fog-free materials still feel distant.

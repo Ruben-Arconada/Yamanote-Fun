@@ -398,9 +398,52 @@ export class Game {
     // ever visible, even with the longer night fog range.
     const groundTex = makeGroundTexture()
     groundTex.repeat.set(56, 56)
+    // Segmented + vertex-colored: neutral in the corridor the embankment
+    // ribbon rides on, opening into broad meadow-green patches farther out —
+    // the uniform billiard felt made the whole plain read as one flat slab.
+    const GROUND_SEGS = 96
+    const groundGeo = new THREE.PlaneGeometry(14000, 14000, GROUND_SEGS, GROUND_SEGS)
+    const trackPts: { x: number; z: number }[] = []
+    for (let i = 0; i < 256; i++) {
+      const p = this.track.pointAt(i / 256)
+      trackPts.push({ x: p.x, z: p.z })
+    }
+    const gPos = groundGeo.attributes.position
+    const gColors = new Float32Array(gPos.count * 3)
+    // Bright multipliers on purpose: the ground texture's base is dark, so a
+    // subtle tint drowned in it — these push the far fields clearly green.
+    const meadow = new THREE.Color(0xb4dc92)
+    const scorch = new THREE.Color(0xd2bc8e)
+    const vCol = new THREE.Color()
+    for (let i = 0; i < gPos.count; i++) {
+      // Plane is later rotated -90° around X, so local (x, y) is world (x, -z).
+      const wx = gPos.getX(i)
+      const wz = -gPos.getY(i)
+      let d2min = Infinity
+      for (const tp of trackPts) {
+        const dx = tp.x - wx
+        const dz = tp.z - wz
+        const d2 = dx * dx + dz * dz
+        if (d2 < d2min) d2min = d2
+      }
+      const dist = Math.sqrt(d2min)
+      // Neutral until past the embankment's reach, then out into the fields.
+      const far = THREE.MathUtils.clamp((dist - 160) / 320, 0, 1)
+      // Low-frequency patchwork so the far ground varies instead of tiling:
+      // meadows with the occasional dry scorched field.
+      const n = Math.sin(wx * 0.0021 + wz * 0.0013) + Math.sin(wx * 0.0007 - wz * 0.0019 + 2.1)
+      const green = THREE.MathUtils.clamp(0.55 + n * 0.42, 0, 1)
+      vCol.setRGB(1, 1, 1)
+        .lerp(meadow, far * green)
+        .lerp(scorch, far * (1 - green) * 0.35)
+      gColors[i * 3] = vCol.r
+      gColors[i * 3 + 1] = vCol.g
+      gColors[i * 3 + 2] = vCol.b
+    }
+    groundGeo.setAttribute('color', new THREE.BufferAttribute(gColors, 3))
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(14000, 14000),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTex, roughness: 1 }),
+      groundGeo,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTex, roughness: 1, vertexColors: true }),
     )
     ground.rotation.x = -Math.PI / 2
     ground.position.y = -0.5
@@ -419,10 +462,12 @@ export class Game {
     const embPositions: number[] = []
     const embColors: number[] = []
     const embUvs: number[] = []
-    // Neutral white on the flat so the ribbon shows the ground texture at the
-    // exact brightness the ground plane does (any tint here darkened the whole
-    // trackside into a visibly different band); greens up only as the land rises.
-    const groundCol = new THREE.Color(0xffffff)
+    // The ribbon IS the visible ground beside the rails, so it carries the
+    // "worked earth" corridor: warm dusty crown near the track, fading to the
+    // plain's neutral at the skirt foot (which tucks under the ground plane,
+    // so the two can never show a seam), and greening as the land rises.
+    const crownEarth = new THREE.Color(0xc9b48f)
+    const plainCol = new THREE.Color(0xffffff)
     const grassCol = new THREE.Color(0x93c46b)
     const embCol = new THREE.Color()
     // Same texel density as the ground plane (14000 wide at repeat 56 = one
@@ -441,7 +486,8 @@ export class Game {
         const y = embankmentSurface(p.y, embLateral[k])
         const pos = p.clone().addScaledVector(normal, embLateral[k])
         embPositions.push(pos.x, y, pos.z)
-        embCol.copy(groundCol).lerp(grassCol, crown ? climb : climb * 0.6)
+        if (crown) embCol.copy(crownEarth).lerp(grassCol, climb)
+        else embCol.copy(plainCol).lerp(grassCol, climb * 0.6)
         embColors.push(embCol.r, embCol.g, embCol.b)
         embUvs.push(embLateral[k] / EMB_TILE, (t * embTrackLen) / EMB_TILE)
       }
