@@ -471,41 +471,56 @@ export function makeMoonTexture(): THREE.CanvasTexture {
  * reached the edges used to get chopped into hard horizontal cuts on the
  * biggest clouds.
  */
-export function makeCloudTexture(): THREE.CanvasTexture {
+// Raw pixels on purpose, NOT a 2D canvas: canvas backing stores are alpha-
+// premultiplied, and un-premultiplying on texture upload divides each channel
+// by a near-zero alpha along the puffs' soft edges. On iOS's GPU canvas the
+// rounding error in that division exploded into saturated per-channel confetti
+// speckles all over the cloud bodies. A DataTexture never premultiplies:
+// RGB stays a constant 255 and only the analytic alpha varies.
+export function makeCloudTexture(): THREE.DataTexture {
   const w = 512
   const h = 256
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d')!
   // px, py, radius as fraction of height — chosen so px*w ± r and py*h ± r
   // always stay within the canvas.
   const puffs: [number, number, number][] = [
     [0.34, 0.56, 0.34], [0.5, 0.5, 0.4], [0.66, 0.56, 0.32], [0.42, 0.44, 0.28], [0.58, 0.42, 0.24], [0.26, 0.62, 0.2], [0.74, 0.62, 0.18],
   ]
-  // Soft-blur the puffs while drawing: gentler alpha ramps leave mobile GPUs
-  // far fewer 8-bit steps to dither into visible grain. (Old Safari ignores
-  // ctx.filter and simply keeps the previous look.)
-  ctx.filter = 'blur(3px)'
-  for (const [px, py, pr] of puffs) {
-    const r = Math.min(h * pr, w * px - 2, w * (1 - px) - 2, h * py - 2, h * (1 - py) - 2)
-    const g = ctx.createRadialGradient(w * px, h * py, 0, w * px, h * py, r)
-    g.addColorStop(0, 'rgba(255,255,255,0.85)')
-    g.addColorStop(0.55, 'rgba(255,255,255,0.38)')
-    g.addColorStop(0.85, 'rgba(255,255,255,0.08)')
-    g.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = g
-    ctx.beginPath()
-    ctx.arc(w * px, h * py, r, 0, Math.PI * 2)
-    ctx.fill()
+  // Same ramp the old radial gradient described: 0.85 core → 0 at the rim.
+  const profile = (t: number): number => {
+    if (t >= 1) return 0
+    if (t < 0.55) return 0.85 + (0.38 - 0.85) * (t / 0.55)
+    if (t < 0.85) return 0.38 + (0.08 - 0.38) * ((t - 0.55) / 0.3)
+    return 0.08 * (1 - (t - 0.85) / 0.15)
   }
-  ctx.filter = 'none'
-  const tex = new THREE.CanvasTexture(canvas)
+  const radii = puffs.map(([px, py, pr]) =>
+    Math.min(h * pr, w * px - 2, w * (1 - px) - 2, h * py - 2, h * (1 - py) - 2),
+  )
+  const data = new Uint8Array(w * h * 4)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let a = 0
+      for (let p = 0; p < puffs.length; p++) {
+        const dx = x - w * puffs[p][0]
+        const dy = y - h * puffs[p][1]
+        const pa = profile(Math.hypot(dx, dy) / radii[p])
+        a += pa * (1 - a) // source-over stacking, like the old painted circles
+      }
+      const i = (y * w + x) * 4
+      data[i] = 255
+      data[i + 1] = 255
+      data[i + 2] = 255
+      data[i + 3] = Math.round(Math.min(1, a) * 255)
+    }
+  }
+  const tex = new THREE.DataTexture(data, w, h)
   tex.colorSpace = THREE.SRGBColorSpace
+  tex.flipY = true // match the CanvasTexture orientation this replaced
   // Clouds are always mid-size on screen; pinning mip level 0 avoids the
   // trilinear shimmer Apple GPUs make of low-alpha 8-bit mip chains.
   tex.generateMipmaps = false
   tex.minFilter = THREE.LinearFilter
+  tex.magFilter = THREE.LinearFilter
+  tex.needsUpdate = true
   return tex
 }
 
