@@ -112,7 +112,9 @@ export class City {
   }
 
   private buildBuildings() {
-    const perTheme = 200
+    // 200 → 270 with LOOP_SCALE 4: same relative density over the 33% longer
+    // loop, instead of silently thinning against the cap.
+    const perTheme = 270
     const dummy = new THREE.Object3D()
 
     // Each district gets its own facade rhythm: dense cool office grids for

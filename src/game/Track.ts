@@ -99,7 +99,10 @@ export class CatenaryCurve extends THREE.Curve<THREE.Vector3> {
 // room to actually accelerate and cruise before the next braking zone instead
 // of departing straight into it — and enough running time for the full
 // trilingual PA sequence to finish comfortably between stops.
-const LOOP_SCALE = 3
+// 3 → 4: at 3 the stops still chained too tightly to enjoy the scenery
+// between them (train physics advances in world units, so a bigger world
+// directly buys more seconds of cruising per stretch).
+const LOOP_SCALE = 4
 
 // ── Relief ───────────────────────────────────────────────────────────────────
 // The quiet green/garden stretch on the north of the loop (Tabata → Komagome →
@@ -110,7 +113,10 @@ const LOOP_SCALE = 3
 // track — camera, rails, sleepers, catenary, platforms, passengers — already
 // reads the curve's y, so it follows the grade for free.
 export const HILL_STATION_ID = 'komagome'
-export const HILL_PEAK = 54   // world units of climb at the crest
+// 54 → 68 with LOOP_SCALE 4: the window is a loop FRACTION, so the bigger
+// world stretched the hill 33% longer — without this bump the grade would
+// have flattened from the approved ~16% to ~12%.
+export const HILL_PEAK = 68   // world units of climb at the crest
 const HILL_HALF_WIDTH = 0.055 // fraction of the loop on each side of the crest
 
 // ── Trackside embankment profile ─────────────────────────────────────────────

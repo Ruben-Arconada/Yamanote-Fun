@@ -97,6 +97,7 @@ export class Scenery {
     this.buildSakuraPetals()
     this.buildHouseRows()
     this.buildHillDressing()
+    this.buildApproachBoards()
     this.buildUtilityPoles()
     this.buildNeonSigns()
     this.buildCrossings()
@@ -521,7 +522,8 @@ export class Scenery {
     // Budget covers the worst case (every quiet/mid station getting its full
     // per-tier quota, see HOUSES_PER_TIER below) with headroom so no station
     // gets shortchanged just because it comes later in loop order.
-    const houseCount = 380
+    // 380 → 500 with LOOP_SCALE 4, keeping row density over longer segments.
+    const houseCount = 500
 
     // Pitched roof as a triangular prism (unit size, scaled per instance),
     // CLOSED underneath — the open soffit let you see straight through the
@@ -622,7 +624,8 @@ export class Scenery {
     // The zone-contrast lever: quiet stretches are thick with low houses,
     // mid stretches get a handful mixed with their towers, urban cores get
     // NONE at all — no traditional houses wedged between skyscrapers.
-    const HOUSES_PER_TIER: Record<ZoneTier, number> = { quiet: 26, mid: 6, urban: 0 }
+    // Bumped ~33% with LOOP_SCALE 4 so the rows read as dense as before.
+    const HOUSES_PER_TIER: Record<ZoneTier, number> = { quiet: 34, mid: 8, urban: 0 }
 
     let idx = 0
     for (let s = 0; s < N && idx < houseCount; s++) {
@@ -1167,6 +1170,91 @@ export class Scenery {
     if (canopies.instanceColor) canopies.instanceColor.needsUpdate = true
     if (hillPines.instanceColor) hillPines.instanceColor.needsUpdate = true
     this.scene.add(trunks, canopies, hillPines)
+  }
+
+  /**
+   * Trackside distance boards on the approach to every station — 500m, 250m
+   * and 100m on the driver's left, Japanese yellow-board style. They give the
+   * braking point a visual language: the PA already calls the arrival at
+   * ~260 units, but nothing on the TRACK warned the eye before the platform
+   * ambushed you around a curve.
+   */
+  private buildApproachBoards() {
+    const len = this.track.getLength()
+    const crossT = this.crossingTFraction()
+    const DISTANCES = [500, 250, 100]
+
+    const makeBoardTexture = (label: string) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 128
+      canvas.height = 96
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#1a1a1a'
+      ctx.fillRect(0, 0, 128, 96)
+      ctx.fillStyle = '#f2c937'
+      ctx.fillRect(5, 5, 118, 86)
+      ctx.fillStyle = '#141414'
+      ctx.textAlign = 'center'
+      ctx.font = '800 44px system-ui, sans-serif'
+      ctx.fillText(label, 64, 52)
+      ctx.font = '700 24px system-ui, sans-serif'
+      ctx.fillText('m', 64, 80)
+      const tex = new THREE.CanvasTexture(canvas)
+      tex.colorSpace = THREE.SRGBColorSpace
+      return tex
+    }
+
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x4b4f55, roughness: 0.7, metalness: 0.3 })
+    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.06, 0.07, 2.6, 6), poleMat, N * DISTANCES.length)
+    const boardMeshes = DISTANCES.map((d) => {
+      const tex = makeBoardTexture(String(d))
+      // A whisper of emissive so the board stays readable at dusk without
+      // needing its own light.
+      const mat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.06, roughness: 0.75 })
+      return new THREE.InstancedMesh(new THREE.PlaneGeometry(1.7, 1.25), mat, N)
+    })
+    const dummy = new THREE.Object3D()
+    let pi = 0
+    const boardCounts = DISTANCES.map(() => 0)
+
+    for (let s = 0; s < N; s++) {
+      const marker = this.track.markerFor(s).tFraction
+      const prev = this.track.markerFor((s - 1 + N) % N).tFraction
+      const gapUnits = (((marker - prev) % 1) + 1) % 1 * len
+      for (let di = 0; di < DISTANCES.length; di++) {
+        const d = DISTANCES[di]
+        // Short stretches drop the boards that wouldn't fit: a "500m" sign
+        // popping up before the PREVIOUS platform would read as nonsense.
+        if (d > gapUnits - 70) continue
+        let t = marker - d / len
+        // Keep clear of the level-crossing corridor (nudge the board earlier).
+        if (Math.abs(((t - crossT) % 1 + 1.5) % 1 - 0.5) * len < 14) t -= 18 / len
+        const p = this.track.pointAt(t)
+        const tangent = this.track.tangentAt(t)
+        const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+        const pos = p.clone().addScaledVector(normal, -7.5) // driver's left
+        const groundY = groundHeightAt(p.y, -7.5)
+
+        dummy.position.set(pos.x, groundY + 1.2, pos.z)
+        dummy.rotation.set(0, 0, 0)
+        dummy.updateMatrix()
+        poles.setMatrixAt(pi++, dummy.matrix)
+
+        dummy.position.set(pos.x, groundY + 2.15, pos.z)
+        // Face the oncoming cab: plane +Z looks back down the travel direction.
+        dummy.rotation.set(0, Math.atan2(-tangent.x, -tangent.z), 0)
+        dummy.updateMatrix()
+        boardMeshes[di].setMatrixAt(boardCounts[di]++, dummy.matrix)
+      }
+    }
+    poles.count = pi
+    poles.instanceMatrix.needsUpdate = true
+    this.scene.add(poles)
+    boardMeshes.forEach((mesh, di) => {
+      mesh.count = boardCounts[di]
+      mesh.instanceMatrix.needsUpdate = true
+      this.scene.add(mesh)
+    })
   }
 
   /**
