@@ -4,6 +4,8 @@ import { Track, TrackOffsetCurve, CatenaryCurve, HILL_PEAK, EMBANKMENT, embankme
 import { Train, notchLabel, MIN_NOTCH, MAX_NOTCH, OPEN_INSTANT_SECONDS, OPEN_QUICK_SECONDS, CLOSE_WINDOW_SECONDS, CLOSE_HURRY_SECONDS, type DoorActionInfo } from './Train'
 import { City, crowdDensityForHour } from './City'
 import { Passengers } from './Passengers'
+import { Precipitation } from './Precipitation'
+import { registerPool, applySeasonToPool, overcastTarget, type Season, type Weather, type SeasonalPool } from './Seasons'
 import { Scenery } from './Scenery'
 import { DayNightCycle } from './DayNightCycle'
 import { audio } from '../audio/AudioEngine'
@@ -34,6 +36,8 @@ function doorSidePhrases(side: 'left' | 'right'): { ja: string; en: string; es: 
 }
 
 const BEST_SCORE_KEY = 'yamanote-best-score'
+const SEASON_KEY = 'yamanote-season'
+const WEATHER_KEY = 'yamanote-weather'
 /** Arcade scoring per stop grade; perfects chain into a streak bonus. */
 const GRADE_POINTS: Record<string, number> = { perfect: 100, good: 60, ok: 30 }
 const STREAK_BONUS = 25
@@ -56,6 +60,13 @@ export class Game {
   private passengers: Passengers
   private scenery: Scenery
   private dayNight: DayNightCycle
+  private precipitation: Precipitation
+  private season: Season = (localStorage.getItem(SEASON_KEY) as Season) || 'spring'
+  private weather: Weather = (localStorage.getItem(WEATHER_KEY) as Weather) || 'clear'
+  /** Ground + embankment vertex-color pools, retinted per season alongside the vegetation. */
+  private terrainPools: SeasonalPool[] = []
+  private ballastMat!: THREE.MeshStandardMaterial
+  private wearMat!: THREE.MeshStandardMaterial
   private headlight!: THREE.SpotLight
   private cabLight!: THREE.PointLight
   private controls: Controls
@@ -146,7 +157,22 @@ export class Game {
       onTimeScaleChange: (s) => (this.timeScale = s),
       onTimeSet: (hour) => (this.dayNight.timeOfDay = hour),
       onDoorAction: () => this.handleDoorButton(),
+      onSeasonSet: (s) => {
+        this.season = s
+        localStorage.setItem(SEASON_KEY, s)
+        this.applyAtmosphere()
+        if (!this.running) this.renderOnce()
+      },
+      onWeatherSet: (w) => {
+        this.weather = w
+        localStorage.setItem(WEATHER_KEY, w)
+        this.applyAtmosphere()
+        if (!this.running) this.renderOnce()
+      },
     })
+
+    this.precipitation = new Precipitation(this.scene)
+    this.applyAtmosphere()
 
     window.addEventListener('resize', () => this.onResize())
     window.addEventListener('keydown', (e) => {
@@ -221,6 +247,31 @@ export class Game {
   /** Renders exactly one frame without advancing simulation — the start screen backdrop and the frame shown right when pausing/resizing. */
   private renderOnce() {
     this.renderer.render(this.scene, this.camera)
+  }
+
+  /**
+   * Applies the selected season + weather across every system that cares:
+   * vegetation/terrain recolor, Fuji snowline, platform canopies, overcast
+   * lighting, the precipitation curtain (rain, or snow in winter) and the
+   * audio layers. One-off cost on change; nothing per-frame.
+   */
+  private applyAtmosphere() {
+    this.scenery.setSeason(this.season)
+    this.city.setSeason(this.season)
+    for (const pool of this.terrainPools) applySeasonToPool(pool, this.season)
+    // The rail corridor joins the winter: ballast whites over (overdriven
+    // against its dark texture) and the beaten-earth band fades under snow.
+    const winter = this.season === 'winter'
+    this.ballastMat.color.setScalar(winter ? 1.65 : 1)
+    this.wearMat.opacity = winter ? 0.25 : 1
+    this.dayNight.overcastGoal = overcastTarget(this.weather)
+    const falling = this.weather === 'rain'
+    this.precipitation.set(falling, winter)
+    audio.setSeason(this.season)
+    // Snowfall is nearly SILENT — just a low breath of wind from the wash
+    // layer; rain gets the full two-layer bed.
+    audio.setRain(falling ? (winter ? 0.12 : 0.85) : 0)
+    this.ui.setAtmo(this.season, this.weather)
   }
 
   /** One control for both door moves — the train decides which (if any) applies right now. */
@@ -359,6 +410,7 @@ export class Game {
     bedGeo.computeVertexNormals()
     const ballast = makeBallastTexture()
     const bedMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: ballast.map, roughnessMap: ballast.roughnessMap, roughness: 1 })
+    this.ballastMat = bedMat
     const bed = new THREE.Mesh(bedGeo, bedMat)
     bed.receiveShadow = true
     this.scene.add(bed)
@@ -492,6 +544,7 @@ export class Game {
       gColors[i * 3 + 2] = vCol.b
     }
     groundGeo.setAttribute('color', new THREE.BufferAttribute(gColors, 3))
+    this.terrainPools.push(registerPool('terrain', groundGeo.getAttribute('color') as THREE.BufferAttribute))
     const ground = new THREE.Mesh(
       groundGeo,
       new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTex, roughness: 1, vertexColors: true }),
@@ -562,6 +615,7 @@ export class Game {
     embGeo.setAttribute('uv', new THREE.Float32BufferAttribute(embUvs, 2))
     embGeo.setIndex(embIndices)
     embGeo.computeVertexNormals()
+    this.terrainPools.push(registerPool('terrain', embGeo.getAttribute('color') as THREE.BufferAttribute))
     const embTex = makeGroundTexture()
     embTex.wrapS = embTex.wrapT = THREE.RepeatWrapping
     const embMat = new THREE.MeshStandardMaterial({
@@ -603,6 +657,7 @@ export class Game {
       depthWrite: false,
       roughness: 1,
     })
+    this.wearMat = wearMat
     const wear = new THREE.Mesh(wearGeo, wearMat)
     wear.receiveShadow = true
     this.scene.add(wear)
@@ -867,6 +922,7 @@ export class Game {
       this.lastCrossingPhase = this.scenery.crossingBlinkPhase
       if (this.scenery.crossingBellActive) audio.crossingTick(0.7)
     }
+    this.precipitation.update(dt, this.camera.position, this.dayNight.nightFactor)
     this.updateHeadlight()
     // Positional platform murmur: nearest station (ahead or just passed)
     // wins; louder for landmark hubs, panned toward the platform side.

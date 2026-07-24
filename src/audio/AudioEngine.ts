@@ -97,6 +97,11 @@ export class AudioEngine {
   private footstepNextAt = 0
   private stationMurmurGain: GainNode | null = null
   private stationMurmurPanner: StereoPannerNode | null = null
+  private rainWashGain: GainNode | null = null
+  private rainPatterGain: GainNode | null = null
+  private rainLevel = 0
+  /** Season shapes the insect chorus — set from the game, defaults to spring. */
+  private season: 'spring' | 'summer' | 'autumn' | 'winter' = 'spring'
 
   get ready() {
     return this.ctx !== null
@@ -136,6 +141,9 @@ export class AudioEngine {
 
     this.noiseBuffer = this.buildNoiseBuffer()
     this.startAmbientBed()
+    // If the weather was already rainy before the tap-to-start unlock, the
+    // rain bed has a level waiting for its nodes.
+    if (this.rainLevel > 0) this.setRain(this.rainLevel)
     this.loadVoices()
 
     this.resumeContext()
@@ -314,6 +322,12 @@ export class AudioEngine {
     const stillness = 1 - Math.min(1, speed01 * 6)
     this.roomToneGain?.gain.setTargetAtTime(0.03 * stillness * duckMul, t, 0.4)
 
+    // Rain breathes: a slow ±20% swell over the wash layer, because a
+    // statistically constant level is something the ear deletes in minutes.
+    if (this.rainLevel > 0 && this.rainWashGain) {
+      this.rainWashGain.gain.setTargetAtTime(this.rainLevel * 0.05 * (1 + 0.2 * Math.sin(t * 0.44)), t, 0.6)
+    }
+
     this.updateRailJoints(dt, speed01, duckMul)
     this.updateTimeAmbience(t, hour, speed01, duckMul)
     this.updateCrowd(t, hour, crowd, duckMul)
@@ -348,6 +362,54 @@ export class AudioEngine {
     const rush = this.rushFactor(hour)
     this.stationMurmurGain.gain.setTargetAtTime(level * (0.35 + 0.65 * rush) * 0.05 * duckMul, t, 0.35)
     this.stationMurmurPanner!.pan.setTargetAtTime(pan, t, 0.3)
+  }
+
+  setSeason(season: 'spring' | 'summer' | 'autumn' | 'winter') {
+    this.season = season
+  }
+
+  /**
+   * Rain bed: a broadband wash (lowpassed noise) plus a bright patter band —
+   * both looping the shared noise buffer, faded by level. Level 0 costs
+   * nothing beyond two silent gain nodes once created.
+   */
+  setRain(level01: number) {
+    this.rainLevel = level01
+    if (!this.ctx || !this.master) return
+    const ctx = this.ctx
+    const t = ctx.currentTime
+    if (!this.rainWashGain) {
+      const wash = ctx.createBufferSource()
+      wash.buffer = this.noiseBuffer
+      wash.loop = true
+      const lp = ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.value = 850
+      this.rainWashGain = ctx.createGain()
+      this.rainWashGain.gain.value = 0
+      wash.connect(lp)
+      lp.connect(this.rainWashGain)
+      this.rainWashGain.connect(this.master)
+      wash.start()
+
+      const patter = ctx.createBufferSource()
+      patter.buffer = this.noiseBuffer
+      patter.loop = true
+      patter.playbackRate.value = 1.31 // detune vs the wash so the two layers never phase-lock
+      const bp = ctx.createBiquadFilter()
+      bp.type = 'bandpass'
+      bp.frequency.value = 3600
+      bp.Q.value = 0.6
+      this.rainPatterGain = ctx.createGain()
+      this.rainPatterGain.gain.value = 0
+      patter.connect(bp)
+      bp.connect(this.rainPatterGain)
+      this.rainPatterGain.connect(this.master)
+      patter.start()
+    }
+    // Slow fades: weather rolls in, it doesn't switch.
+    this.rainWashGain.gain.setTargetAtTime(level01 * 0.05, t, 1.2)
+    this.rainPatterGain!.gain.setTargetAtTime(level01 * 0.016, t, 1.2)
   }
 
   /** Rough crowd curve — peaks at the morning/evening rush, quiet overnight. */
@@ -400,17 +462,36 @@ export class AudioEngine {
       this.ambNextAt = t + 1.2
       return
     }
+    // Rain pushes the small voices into the distance — floored, not muted:
+    // insects under rain sound far away, they don't cease to exist.
+    const rainMute = Math.max(0.25, 1 - this.rainLevel * 1.2)
+    // The seasonal chorus: winter is hushed (dawn birds only), spring is
+    // birdsong (a cicada in April would be as impossible as October sakura,
+    // and without the director's licence), summer howls with cicadas,
+    // autumn belongs to the bell crickets.
+    const winter = this.season === 'winter'
     if (hour >= 4.5 && hour < 9) {
-      this.playBirdChirp(t, 0.032 * vol)
-      this.ambNextAt = t + 1.6 + Math.random() * 3.4
+      this.playBirdChirp(t, 0.032 * vol * rainMute * (winter ? 0.5 : 1))
+      this.ambNextAt = t + (winter ? 3.2 : 1.6) + Math.random() * 3.4
+    } else if (winter) {
+      // Snow hush — the countryside goes quiet outside the dawn chorus.
+      this.ambNextAt = t + 3
     } else if (hour >= 9 && hour < 17) {
-      this.playCicada(t, 0.014 * vol)
-      this.ambNextAt = t + 2.2 + Math.random() * 3.6
+      if (this.season === 'spring') {
+        this.playBirdChirp(t, 0.02 * vol * rainMute)
+        this.ambNextAt = t + 2.6 + Math.random() * 4
+      } else {
+        this.playCicada(t, 0.014 * (this.season === 'summer' ? 2.1 : 0.15) * vol * rainMute)
+        this.ambNextAt = t + (this.season === 'summer' ? 1.3 : 2.2) + Math.random() * 3.6
+      }
     } else if (hour >= 17 && hour < 19.5) {
-      this.playHigurashi(t, 0.022 * vol)
+      this.playHigurashi(t, 0.022 * vol * rainMute * (this.season === 'summer' ? 1.4 : 1))
       this.ambNextAt = t + 2.6 + Math.random() * 3.2
+    } else if (this.season === 'autumn') {
+      this.playSuzumushi(t, 0.024 * vol * rainMute)
+      this.ambNextAt = t + 0.9 + Math.random() * 1.3
     } else {
-      this.playCrickets(t, 0.02 * vol)
+      this.playCrickets(t, 0.02 * vol * rainMute)
       this.ambNextAt = t + 0.9 + Math.random() * 1.4
     }
   }
@@ -509,6 +590,39 @@ export class AudioEngine {
       osc.start(start)
       osc.stop(start + 0.06)
       start += 0.07
+    }
+  }
+
+  /**
+   * The autumn bell cricket (suzumushi): two longer ~4.5 kHz pulses with a
+   * slow vibrato — the "rin, rin" that owns Japanese autumn nights, distinct
+   * from the generic cricket's dry triplet.
+   */
+  private playSuzumushi(when: number, vol: number) {
+    const ctx = this.ctx!
+    let start = when + 0.02
+    for (let i = 0; i < 2; i++) {
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.value = 4400 + Math.random() * 220
+      const lfo = ctx.createOscillator()
+      lfo.frequency.value = 26 + Math.random() * 8
+      const lfoGain = ctx.createGain()
+      lfoGain.gain.value = 55
+      lfo.connect(lfoGain)
+      lfoGain.connect(osc.frequency)
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, start)
+      g.gain.linearRampToValueAtTime(vol, start + 0.02)
+      g.gain.setValueAtTime(vol, start + 0.08)
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.14)
+      osc.connect(g)
+      g.connect(this.dryGain!)
+      osc.start(start)
+      osc.stop(start + 0.16)
+      lfo.start(start)
+      lfo.stop(start + 0.16)
+      start += 0.24
     }
   }
 

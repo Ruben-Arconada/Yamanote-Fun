@@ -20,6 +20,8 @@ interface Keyframe {
 }
 
 const C = (hex: number) => new THREE.Color(hex)
+const SUN_DIR_SCRATCH = new THREE.Vector3()
+const MOON_DIR_SCRATCH = new THREE.Vector3()
 
 const KEYFRAMES: Keyframe[] = [
   { hour: 0, skyTop: C(0x03040d), skyMid: C(0x070a18), skyBottom: C(0x0c1226), sunColor: C(0x33447a), sunIntensity: 0.05, ambientIntensity: 0.16, fogColor: C(0x05060f), fogNear: 70, fogFar: 1500, label: 'Madrugada' },
@@ -37,6 +39,23 @@ const KEYFRAMES: Keyframe[] = [
   { hour: 24, skyTop: C(0x03040d), skyMid: C(0x070a18), skyBottom: C(0x0c1226), sunColor: C(0x33447a), sunIntensity: 0.05, ambientIntensity: 0.16, fogColor: C(0x05060f), fogNear: 70, fogFar: 1500, label: 'Madrugada' },
 ]
 
+// Written into per call rather than allocated: lerpKeyframes runs every
+// frame, and the fresh object + five Color.clone()s it used to make were
+// the render loop's biggest steady garbage source.
+const KF_SCRATCH: Keyframe = {
+  hour: 0,
+  skyTop: new THREE.Color(),
+  skyMid: new THREE.Color(),
+  skyBottom: new THREE.Color(),
+  sunColor: new THREE.Color(),
+  sunIntensity: 1,
+  ambientIntensity: 0.5,
+  fogColor: new THREE.Color(),
+  fogNear: 200,
+  fogFar: 1500,
+  label: '',
+}
+
 function lerpKeyframes(hour: number): Keyframe {
   let a = KEYFRAMES[0]
   let b = KEYFRAMES[KEYFRAMES.length - 1]
@@ -49,19 +68,19 @@ function lerpKeyframes(hour: number): Keyframe {
   }
   const span = b.hour - a.hour || 1
   const f = (hour - a.hour) / span
-  return {
-    hour,
-    skyTop: a.skyTop.clone().lerp(b.skyTop, f),
-    skyMid: a.skyMid.clone().lerp(b.skyMid, f),
-    skyBottom: a.skyBottom.clone().lerp(b.skyBottom, f),
-    sunColor: a.sunColor.clone().lerp(b.sunColor, f),
-    sunIntensity: THREE.MathUtils.lerp(a.sunIntensity, b.sunIntensity, f),
-    ambientIntensity: THREE.MathUtils.lerp(a.ambientIntensity, b.ambientIntensity, f),
-    fogColor: a.fogColor.clone().lerp(b.fogColor, f),
-    fogNear: THREE.MathUtils.lerp(a.fogNear, b.fogNear, f),
-    fogFar: THREE.MathUtils.lerp(a.fogFar, b.fogFar, f),
-    label: f < 0.5 ? a.label : b.label,
-  }
+  const out = KF_SCRATCH
+  out.hour = hour
+  out.skyTop.copy(a.skyTop).lerp(b.skyTop, f)
+  out.skyMid.copy(a.skyMid).lerp(b.skyMid, f)
+  out.skyBottom.copy(a.skyBottom).lerp(b.skyBottom, f)
+  out.sunColor.copy(a.sunColor).lerp(b.sunColor, f)
+  out.sunIntensity = THREE.MathUtils.lerp(a.sunIntensity, b.sunIntensity, f)
+  out.ambientIntensity = THREE.MathUtils.lerp(a.ambientIntensity, b.ambientIntensity, f)
+  out.fogColor.copy(a.fogColor).lerp(b.fogColor, f)
+  out.fogNear = THREE.MathUtils.lerp(a.fogNear, b.fogNear, f)
+  out.fogFar = THREE.MathUtils.lerp(a.fogFar, b.fogFar, f)
+  out.label = f < 0.5 ? a.label : b.label
+  return out
 }
 
 const SKY_VERTEX = /* glsl */ `
@@ -96,8 +115,24 @@ void main() {
 }
 `
 
+/**
+ * Blends a sky/fog color toward overcast gray, in place. `grayLevel` is the
+ * luminance the overcast should sit at — a real closed sky is a FLAT BRIGHT
+ * gray by day (deep blue skies have low luma, so collapsing toward their own
+ * luminance wrongly turned noon into dusk) and near-black at night.
+ */
+function overcastTint(c: THREE.Color, o: number, grayLevel: number) {
+  c.r = THREE.MathUtils.lerp(c.r, grayLevel * 0.96, 0.8 * o)
+  c.g = THREE.MathUtils.lerp(c.g, grayLevel * 0.98, 0.8 * o)
+  c.b = THREE.MathUtils.lerp(c.b, grayLevel * 1.0, 0.8 * o)
+}
+
 export class DayNightCycle {
   timeOfDay = 7.5 // start at a pleasant morning
+  /** Where the weather wants the sky: 0 = clear, 1 = fully overcast. The cycle eases toward it. */
+  overcastGoal = 0
+  /** Current eased overcast amount — Scenery reads this to darken the clouds. */
+  overcast = 0
   readonly sunLight: THREE.DirectionalLight
   readonly moonLight: THREE.DirectionalLight
   readonly ambient: THREE.HemisphereLight
@@ -231,11 +266,33 @@ export class DayNightCycle {
     const kf = lerpKeyframes(this.timeOfDay)
     this.currentKf = kf
 
+    // Weather sits on top of the hour: overcast eases in/out over a couple
+    // of seconds and flattens light, sky and fog toward gray. kf is a fresh
+    // per-frame blend, so mutating it here never corrupts the keyframes.
+    this.overcast += (this.overcastGoal - this.overcast) * Math.min(1, dt * 0.9)
+    const o = this.overcast
+    if (o > 0.001) {
+      // How bright the flat gray lid should be right now, from the sun's
+      // unmodified strength: luminous pearl at noon, charcoal at night.
+      const dayLevel = THREE.MathUtils.clamp(kf.sunIntensity / 1.85, 0, 1) * 0.72 + 0.05
+      overcastTint(kf.skyTop, o, dayLevel * 0.82)
+      overcastTint(kf.skyMid, o, dayLevel * 0.94)
+      overcastTint(kf.skyBottom, o, dayLevel)
+      overcastTint(kf.fogColor, o, dayLevel * 0.96)
+      overcastTint(kf.sunColor, o * 0.7, dayLevel)
+      kf.sunIntensity *= 1 - 0.62 * o
+      // Diffuse skylight actually RISES a touch under cloud relative to the
+      // lost direct sun — this is what keeps an overcast noon bright.
+      kf.ambientIntensity *= 1 + 0.22 * o * THREE.MathUtils.clamp(kf.sunIntensity, 0, 1)
+      kf.fogNear *= 1 - 0.52 * o
+      kf.fogFar *= 1 - 0.38 * o
+    }
+
     const elevationDeg = this.sunElevationDeg()
     const azimuthDeg = 100 + this.timeOfDay * 2
     const elevRad = THREE.MathUtils.degToRad(elevationDeg)
     const azRad = THREE.MathUtils.degToRad(azimuthDeg)
-    const sunDir = new THREE.Vector3(
+    const sunDir = SUN_DIR_SCRATCH.set(
       Math.cos(elevRad) * Math.cos(azRad),
       Math.sin(elevRad),
       Math.cos(elevRad) * Math.sin(azRad),
@@ -245,9 +302,10 @@ export class DayNightCycle {
     this.sunLight.target.updateMatrixWorld()
     this.sunLight.color.copy(kf.sunColor)
     this.sunLight.intensity = kf.sunIntensity
-    this.sunLight.castShadow = elevationDeg > -2
+    // Hard shadows die under a closed sky — everything goes soft-lit.
+    this.sunLight.castShadow = elevationDeg > -2 && o < 0.55
 
-    const moonDir = sunDir.clone().negate()
+    const moonDir = MOON_DIR_SCRATCH.copy(sunDir).negate()
     this.moonLight.target.position.copy(focusPoint)
     this.moonLight.position.copy(focusPoint).addScaledVector(moonDir, this.sunDistance)
     this.moonLight.target.updateMatrixWorld()
@@ -268,7 +326,7 @@ export class DayNightCycle {
     // Halo strongest when the sun rides low with real intensity behind it —
     // sunrise/sunset blaze, gentle by day, none at night.
     const lowSun = 1 - THREE.MathUtils.clamp(Math.abs(elevationDeg) / 28, 0, 1)
-    mat.uniforms.glowStrength.value = THREE.MathUtils.clamp(kf.sunIntensity, 0, 1.6) * (0.22 + lowSun * 0.55)
+    mat.uniforms.glowStrength.value = THREE.MathUtils.clamp(kf.sunIntensity, 0, 1.6) * (0.22 + lowSun * 0.55) * (1 - 0.85 * o)
 
     if (this.scene.fog instanceof THREE.Fog) {
       this.scene.fog.color.copy(kf.fogColor)
@@ -279,15 +337,16 @@ export class DayNightCycle {
     this.sunSprite.position.copy(focusPoint).addScaledVector(sunDir, 1900)
     this.sunSprite.visible = elevationDeg > -8
     const sunMat = this.sunSprite.material as THREE.SpriteMaterial
-    sunMat.opacity = THREE.MathUtils.clamp((elevationDeg + 8) / 14, 0, 1)
+    sunMat.opacity = THREE.MathUtils.clamp((elevationDeg + 8) / 14, 0, 1) * (1 - o)
 
     this.moonSprite.position.copy(focusPoint).addScaledVector(moonDir, 1900)
     this.moonSprite.visible = elevationDeg < 8
     const moonMat = this.moonSprite.material as THREE.SpriteMaterial
-    moonMat.opacity = THREE.MathUtils.clamp((-elevationDeg + 8) / 14, 0, 1) * 0.9
+    moonMat.opacity = THREE.MathUtils.clamp((-elevationDeg + 8) / 14, 0, 1) * 0.9 * (1 - o)
 
-    this.starsMaterial.opacity = this.nightFactor * 0.75
-    this.starsBrightMaterial.opacity = this.nightFactor * 0.95
+    // A closed sky hides the stars long before it hides the city glow.
+    this.starsMaterial.opacity = this.nightFactor * 0.75 * (1 - o)
+    this.starsBrightMaterial.opacity = this.nightFactor * 0.95 * (1 - o)
     this.stars.position.copy(focusPoint)
     this.starsBright.position.copy(focusPoint)
     // Sky dome follows the cab so its gradient (and margins against distant

@@ -56,6 +56,17 @@ export class Track {
   markerFor(stationIndex: number): StationMarker {
     return this.stationMarkers[stationIndex % this.stationMarkers.length]
   }
+
+  /**
+   * Unit-tangent Y (vertical slope component) straight from the analytic
+   * hill profile — what the per-frame physics wants, without the two
+   * Vector3s THREE.Curve.getTangent allocates internally per call.
+   */
+  gradeYAt(tFraction: number): number {
+    const t = THREE.MathUtils.euclideanModulo(tFraction, 1)
+    const g = hillGrade(t, this.hillCenter) / this.length
+    return g / Math.sqrt(1 + g * g)
+  }
 }
 
 /** A curve running parallel to the track's centerline, offset sideways — used to lay rail geometry. */

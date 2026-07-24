@@ -3,6 +3,7 @@ import type { Track } from './Track'
 import { groundHeightAt, mountainRoadPath } from './Track'
 import { STATIONS, prevStationIndex, nextStationIndex, type ZoneTier } from '../data/stations'
 import { makeStationSignTexture, makePlatformTileTexture, makeTactilePavingTexture, makeWindowGridTexture, applyProgressiveWindows, LOOP_LINE_COLOR } from './signage'
+import { registerPool, applySeasonToPool, type Season, type SeasonalPool } from './Seasons'
 
 const THEME_GROUPS = ['business', 'downtown', 'shitamachi', 'green', 'youth', 'bay'] as const
 
@@ -95,6 +96,8 @@ export class City {
   private ledStripMat!: THREE.MeshStandardMaterial
   private signEntries: SignEntry[] = []
   private time = 0
+  /** Platform canopy colors, snow-capped in winter alongside the house roofs. */
+  private canopyPools: SeasonalPool[] = []
 
   constructor(scene: THREE.Scene, track: Track) {
     this.scene = scene
@@ -497,6 +500,12 @@ export class City {
       this.scene.add(mesh)
     }
     this.lampMaterials.push(lampMat)
+    this.canopyPools.push(registerPool('roof', roof.instanceColor!))
+  }
+
+  /** Winter dusts the platform canopies white; every other season restores them. */
+  setSeason(season: Season) {
+    for (const pool of this.canopyPools) applySeasonToPool(pool, season)
   }
 
   private addLandmarkProps(id: string, stationGroup: THREE.Group, accent: number) {

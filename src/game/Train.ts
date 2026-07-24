@@ -22,6 +22,10 @@ const BRAKE_DECEL_KMH_S = [1.0, 1.6, 2.2, 2.8, 3.4, 4.0, 4.6] // B1..B7
 const EMERGENCY_DECEL_KMH_S = 6.0
 const COAST_DRAG_KMH_S = 0.15
 const MAX_SPEED_KMH = 95
+// Grade resistance with the agreed arcade factor 0.25: the visual ~16% hill
+// behaves like a physical ~4% — g·3.6·0.25 ≈ 8.8 (km/h)/s per unit of
+// tangent slope. Climbing bleeds momentum, descending feeds it.
+const GRADE_ACCEL_KMH_S = 8.8
 
 const STATION_ZONE_HALF_WIDTH = 26 // world units either side of the platform marker
 const STOP_SPEED_THRESHOLD_KMH = 3
@@ -195,6 +199,9 @@ export class Train {
     if (this.notch === MIN_NOTCH) accelKmhS = -EMERGENCY_DECEL_KMH_S
     else if (this.notch < 0) accelKmhS = -BRAKE_DECEL_KMH_S[Math.abs(this.notch) - 1]
     else if (this.notch > 0) accelKmhS = POWER_ACCEL_KMH_S[this.notch - 1]
+
+    // The Komagome grade pushes back (or shoves along) at the arcade factor.
+    accelKmhS -= this.track.gradeYAt(this.progressFraction) * GRADE_ACCEL_KMH_S
 
     this.speedKmh = THREE.MathUtils.clamp(this.speedKmh + accelKmhS * dt, 0, MAX_SPEED_KMH)
 

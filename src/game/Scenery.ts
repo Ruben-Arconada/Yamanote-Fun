@@ -1,9 +1,11 @@
 import * as THREE from 'three'
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import type { Track } from './Track'
 import { groundHeightAt, HILL_STATION_ID, mountainRoadPath } from './Track'
 import type { DayNightCycle } from './DayNightCycle'
 import { STATIONS, type ZoneTier } from '../data/stations'
 import { makeCloudTexture, makeNeonSignTexture, makeWindowGridTexture, makeRoofTileTexture, applyProgressiveWindows } from './signage'
+import { registerPool, applySeasonToPool, type Season, type SeasonalPool } from './Seasons'
 
 const N = STATIONS.length
 
@@ -19,6 +21,7 @@ const NEON_SIGNS: { text: string; bg: string; fg: string }[] = [
 ]
 
 const CLOUD_COUNT = 26
+const PETALS_PER_CLUSTER = 40
 
 // Billboarded cloud quads in one InstancedMesh: the vertex shader re-derives
 // each instance's center + scale and re-expands the quad along the camera's
@@ -79,9 +82,16 @@ export class Scenery {
   private crossingT = -1
   /** XZ samples of the mountain road's centerline — houses/trees/scrub use these to keep off the asphalt. */
   private roadSamples: { x: number; z: number }[] = []
-  private sakuraClusters: { x: number; z: number }[] = []
+  /** `always` marks clusters that bloom (and shed petals) in every season — the Komagome garden. */
+  private sakuraClusters: { x: number; z: number; always: boolean }[] = []
   private petalsMesh: THREE.Points | null = null
   private petalSeeds!: Float32Array
+  /** Everything that changes color with the season, registered at build time. */
+  private seasonalPools: SeasonalPool[] = []
+  private season: Season = 'spring'
+  /** Winter drops Fuji's snowline: two prebuilt caps, one visible at a time. */
+  private fujiSnowRegular!: THREE.Mesh
+  private fujiSnowWinter!: THREE.Mesh
   /** True while the twin red lamps are lit (train nearby) — Game reads flips to drive the kan-kan bell. */
   crossingBellActive = false
   crossingBlinkPhase = false
@@ -160,7 +170,6 @@ export class Scenery {
    * so the trees get their 1% of life.
    */
   private buildSakuraPetals() {
-    const PETALS_PER_CLUSTER = 40
     const total = this.sakuraClusters.length * PETALS_PER_CLUSTER
     if (!total) return
     const positions = new Float32Array(total * 3)
@@ -299,6 +308,10 @@ export class Scenery {
     peaks.instanceMatrix.needsUpdate = true
     if (peaks.instanceColor) peaks.instanceColor.needsUpdate = true
     this.scene.add(peaks)
+    // The horizon votes with the season too: ochre koyo ridges in autumn,
+    // deep summer green, snowed-in winter (the panel caught spring peaks
+    // photobombing the autumn postcard).
+    this.seasonalPools.push(registerPool('mountain', peaks.instanceColor!))
   }
 
   /** Loop-center-relative outward placement: from a station's track point, step away from the loop center. */
@@ -356,31 +369,37 @@ export class Scenery {
     const fujiPos = new THREE.Vector3(-3650, -60, 2600) // base sunk under the plain
     fuji.position.copy(fujiPos)
     this.scene.add(fuji)
-    // Snow cap: same profile pushed 4% proud (coplanar cones shimmered), only
-    // the top ~30%, and with a JAGGED lower edge — vertices near the snowline
-    // wobble with the angle so it reads as fingers of snow, not a clean ring.
-    const SNOW_FROM = 0.55
-    const snowPts: THREE.Vector2[] = []
-    for (let i = 0; i <= 12; i++) {
-      const h = SNOW_FROM + (i / 12) * (1 - SNOW_FROM)
-      snowPts.push(new THREE.Vector2(Math.max(0.001, fujiProfile(h)) * FUJI_R * 1.04, h * FUJI_H))
+    // Snow cap: same profile pushed 4% proud (coplanar cones shimmered), and
+    // with a JAGGED lower edge — vertices near the snowline wobble with the
+    // angle so it reads as fingers of snow, not a clean ring. Built twice:
+    // the usual cap plus a much lower winter snowline, toggled by season.
+    const makeSnowCap = (snowFrom: number) => {
+      const snowPts: THREE.Vector2[] = []
+      for (let i = 0; i <= 12; i++) {
+        const h = snowFrom + (i / 12) * (1 - snowFrom)
+        snowPts.push(new THREE.Vector2(Math.max(0.001, fujiProfile(h)) * FUJI_R * 1.04, h * FUJI_H))
+      }
+      const snowGeo = new THREE.LatheGeometry(snowPts, 48)
+      const sp = snowGeo.attributes.position
+      const snowBaseY = snowFrom * FUJI_H
+      for (let i = 0; i < sp.count; i++) {
+        const y = sp.getY(i)
+        const fall = 1 - Math.min(1, (y - snowBaseY) / (FUJI_H * 0.12))
+        if (fall <= 0) continue
+        const a = Math.atan2(sp.getZ(i), sp.getX(i))
+        // Biased downward: snow fingers hang below the ring line, they don't rise.
+        const wobble = ((Math.sin(a * 7) * 0.6 + Math.sin(a * 13 + 1.7) * 0.4) - 0.55) * FUJI_H * 0.05
+        sp.setY(i, y + wobble * fall)
+      }
+      snowGeo.computeVertexNormals()
+      const snow = new THREE.Mesh(snowGeo, this.fujiSnowMat)
+      snow.position.copy(fujiPos)
+      this.scene.add(snow)
+      return snow
     }
-    const snowGeo = new THREE.LatheGeometry(snowPts, 48)
-    const sp = snowGeo.attributes.position
-    const snowBaseY = SNOW_FROM * FUJI_H
-    for (let i = 0; i < sp.count; i++) {
-      const y = sp.getY(i)
-      const fall = 1 - Math.min(1, (y - snowBaseY) / (FUJI_H * 0.12))
-      if (fall <= 0) continue
-      const a = Math.atan2(sp.getZ(i), sp.getX(i))
-      // Biased downward: snow fingers hang below the ring line, they don't rise.
-      const wobble = ((Math.sin(a * 7) * 0.6 + Math.sin(a * 13 + 1.7) * 0.4) - 0.55) * FUJI_H * 0.05
-      sp.setY(i, y + wobble * fall)
-    }
-    snowGeo.computeVertexNormals()
-    const snow = new THREE.Mesh(snowGeo, this.fujiSnowMat)
-    snow.position.copy(fujiPos)
-    this.scene.add(snow)
+    this.fujiSnowRegular = makeSnowCap(0.55)
+    this.fujiSnowWinter = makeSnowCap(0.28)
+    this.fujiSnowWinter.visible = false
 
     // ——— Tokyo Tower near Hamamatsucho: red/white banded lattice silhouette.
     // NEGATIVE outward distance = inland, INSIDE the loop — the real tower
@@ -442,11 +461,14 @@ export class Scenery {
     const dummy = new THREE.Object3D()
     const tint = new THREE.Color()
 
-    // ——— Sakura: clustered near green-district stations, plus a light
-    // sprinkle elsewhere. One instanced trunk + three jittered canopy puffs.
+    // ——— Sakura: clustered near green-district stations, plus a dedicated
+    // GROVE hugging the hill station's platform — Komagome's garden blooms
+    // in every season (Rubén's one non-negotiable), so the autumn hill gets
+    // momiji slopes AND cherry blossom over the platform at once.
     const greenStations = STATIONS.map((s, i) => ({ s, i })).filter(({ s }) => s.theme.district === 'green')
     const sakuraPerStation = 14
-    const sakuraCount = greenStations.length * sakuraPerStation
+    const GROVE_TREES = 12
+    const sakuraCount = greenStations.length * sakuraPerStation + GROVE_TREES
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3527, roughness: 0.95 })
     const sakuraTrunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.28, 0.42, 3.2, 6), trunkMat, sakuraCount)
     const blossomMat = new THREE.MeshStandardMaterial({ color: 0xf5c9dc, roughness: 0.9 })
@@ -456,8 +478,9 @@ export class Scenery {
 
     let ti = 0
     let ci = 0
-    for (const { i } of greenStations) {
+    for (const { s: stationDef, i } of greenStations) {
       const marker = this.track.markerFor(i)
+      const clusterStartCi = ci
       let sumX = 0
       let sumZ = 0
       for (let k = 0; k < sakuraPerStation; k++) {
@@ -499,7 +522,64 @@ export class Scenery {
           ci++
         }
       }
-      this.sakuraClusters.push({ x: sumX / sakuraPerStation, z: sumZ / sakuraPerStation })
+      const isHill = stationDef.id === HILL_STATION_ID
+      this.sakuraClusters.push({ x: sumX / sakuraPerStation, z: sumZ / sakuraPerStation, always: isHill })
+      // The hill garden's cluster blooms all year; the rest follow spring.
+      this.seasonalPools.push(registerPool(isHill ? 'sakuraEver' : 'sakura', sakuraCanopies.instanceColor!, clusterStartCi, ci - clusterStartCi))
+    }
+
+    // ——— The Komagome platform grove: a ring of big cherries wrapping the
+    // hill station itself — over the canopy behind the platform, framing the
+    // opposite side the cab looks out on, and closing both platform ends.
+    {
+      const hillIdx = STATIONS.findIndex((s) => s.id === HILL_STATION_ID)
+      const marker = this.track.markerFor(Math.max(0, hillIdx))
+      const platformSide = STATIONS[Math.max(0, hillIdx)].doorSide === 'left' ? -1 : 1 // sign against `normal` (driver's right)
+      const groveStartCi = ci
+      // [along-track, lateral (platform-side positive), scale] — kept clear
+      // of the rail corridor (canopies stop ~5 units short of the track).
+      const groveSpots: [number, number, number][] = [
+        [-26, 19, 1.35], [-9, 22, 1.5], [8, 20, 1.45], [25, 21, 1.3],
+        [-20, -12, 1.2], [-2, -14, 1.35], [16, -12, 1.25],
+        [-48, 11, 1.2], [-45, -11, 1.15], [45, 11, 1.2], [49, -11, 1.15], [56, 12, 1.1],
+      ]
+      let sumX = 0
+      let sumZ = 0
+      const len = this.track.getLength()
+      for (const [along, lat, scale] of groveSpots) {
+        const t = marker.tFraction + along / len
+        const p = this.track.pointAt(t)
+        const tangent = this.track.tangentAt(t)
+        const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+        const off = platformSide * lat
+        const pos = p.clone().addScaledVector(normal, off)
+        const groundY = groundHeightAt(p.y, off)
+        sumX += pos.x
+        sumZ += pos.z
+
+        dummy.position.set(pos.x, groundY + 1.6 * scale - 0.1, pos.z)
+        dummy.scale.setScalar(scale)
+        dummy.rotation.set(0, Math.random() * Math.PI, 0)
+        dummy.updateMatrix()
+        sakuraTrunks.setMatrixAt(ti++, dummy.matrix)
+        for (let b = 0; b < 3; b++) {
+          const br = (1.9 + Math.random() * 1.1) * scale
+          dummy.position.set(
+            pos.x + (Math.random() - 0.5) * 2.6 * scale,
+            groundY + (3.4 + Math.random() * 1.5) * scale,
+            pos.z + (Math.random() - 0.5) * 2.6 * scale,
+          )
+          dummy.scale.set(br, br * 0.78, br)
+          dummy.rotation.set(0, 0, 0)
+          dummy.updateMatrix()
+          sakuraCanopies.setMatrixAt(ci, dummy.matrix)
+          tint.setHSL(0.925 + Math.random() * 0.035, 0.58, 0.8 + Math.random() * 0.09)
+          sakuraCanopies.setColorAt(ci, tint)
+          ci++
+        }
+      }
+      this.sakuraClusters.push({ x: sumX / groveSpots.length, z: sumZ / groveSpots.length, always: true })
+      this.seasonalPools.push(registerPool('sakuraEver', sakuraCanopies.instanceColor!, groveStartCi, ci - groveStartCi))
     }
     sakuraTrunks.count = ti
     sakuraCanopies.count = ci
@@ -555,13 +635,14 @@ export class Scenery {
     pineFoliage.instanceMatrix.needsUpdate = true
     if (pineFoliage.instanceColor) pineFoliage.instanceColor.needsUpdate = true
     this.scene.add(pineTrunks, pineFoliage)
+    this.seasonalPools.push(registerPool('pine', pineFoliage.instanceColor!))
 
     // ——— Low scrub: flattened bushes scattered in the band beyond the worn
     // corridor — filler texture that keeps the mid-ground from reading as
     // bare billiard felt, weighted toward quiet zones like the pines.
     const scrubCount = 520
     const scrubMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 })
-    const scrub = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), scrubMat, scrubCount)
+    const scrub = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 5, 4), scrubMat, scrubCount)
     scrub.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(scrubCount * 3), 3)
     for (let k = 0; k < scrubCount; k++) {
       // Same resample-not-skip rule as the pines (see above).
@@ -591,29 +672,35 @@ export class Scenery {
     scrub.instanceMatrix.needsUpdate = true
     if (scrub.instanceColor) scrub.instanceColor.needsUpdate = true
     this.scene.add(scrub)
+    this.seasonalPools.push(registerPool('scrub', scrub.instanceColor!))
   }
 
   /**
-   * Low shitamachi-style houses filling the near band between the track and
-   * the big background buildings: box walls + pitched prism roofs, with a
-   * small warm window texture that lights up at night.
+   * Shitamachi house rows, rebuilt "japonés a tope": every house is composed
+   * from shared instanced pools — chamfered wall blocks (no more perfect
+   * boxes), three roof silhouettes (kirizuma gable, yosemune hip, and their
+   * irimoya stack), ridge caps, low block-wall fences with a gated entry
+   * (mini roof over the gate), engawa porches with posts on the garden
+   * archetypes, L-plans and two-story volumes. Entrances face the track so
+   * the cab actually sees gates and porches. Still ~a dozen draw calls for
+   * all 500 houses.
    */
   private buildHouseRows() {
     const dummy = new THREE.Object3D()
+    dummy.rotation.order = 'YXZ' // yaw first, then the awning pitch
     const tint = new THREE.Color()
-    // Budget covers the worst case (every quiet/mid station getting its full
-    // per-tier quota, see HOUSES_PER_TIER below) with headroom so no station
-    // gets shortchanged just because it comes later in loop order.
-    // 380 → 500 with LOOP_SCALE 4, keeping row density over longer segments.
     const houseCount = 500
 
-    // Pitched roof as a triangular prism (unit size, scaled per instance),
-    // CLOSED underneath — the open soffit let you see straight through the
-    // eaves into backfaces — and with UVs so the kawara tile texture maps
-    // along each slope.
-    const roofGeo = new THREE.BufferGeometry()
+    // ——— Unit geometries ———
+    // Chamfered wall block: one-segment rounded box = a 45° chamfer for 44
+    // triangles. BoxGeometry-style per-face UVs keep the window texture flat.
+    const wallGeo = new RoundedBoxGeometry(1, 1, 1, 1, 0.05)
+
+    // Kirizuma gable prism (unit, scaled per instance), CLOSED underneath —
+    // the open soffit let you see straight through the eaves into backfaces.
+    const gableGeo = new THREE.BufferGeometry()
     const hw = 0.62 // slight eave overhang beyond the unit wall
-    const verts = new Float32Array([
+    const gableVerts = new Float32Array([
       // front gable triangle
       -hw, 0, 0.62, hw, 0, 0.62, 0, 0.5, 0.62,
       // back gable triangle
@@ -625,26 +712,59 @@ export class Scenery {
       // soffit (underside, facing down)
       -hw, 0, 0.62, -hw, 0, -0.62, hw, 0, -0.62, -hw, 0, 0.62, hw, 0, -0.62, hw, 0, 0.62,
     ])
-    // UVs: gables get shrunk corners of the texture; slopes span it fully
-    // (u = along eave, v = up the slope); soffit reuses a dark-ish corner.
-    const uvs = new Float32Array([
+    const gableUvs = new Float32Array([
       0, 0, 0.25, 0, 0.125, 0.2,
       0, 0, 0.25, 0, 0.125, 0.2,
       0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0,
       0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1,
       0, 0, 0, 0.1, 0.1, 0.1, 0, 0, 0.1, 0.1, 0.1, 0,
     ])
-    roofGeo.setAttribute('position', new THREE.BufferAttribute(verts, 3))
-    roofGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
-    roofGeo.computeVertexNormals()
+    gableGeo.setAttribute('position', new THREE.BufferAttribute(gableVerts, 3))
+    gableGeo.setAttribute('uv', new THREE.BufferAttribute(gableUvs, 2))
+    gableGeo.computeVertexNormals()
+
+    // Yosemune hip roof: four slopes meeting a short ridge — same winding
+    // and eave conventions as the gable so both read as one tile family.
+    const hipGeo = (() => {
+      const hx = 0.66
+      const hz = 0.66
+      const rz = 0.26 // half-length of the top ridge
+      const h = 0.5
+      const v = new Float32Array([
+        // front hip triangle (+z)
+        -hx, 0, hz, hx, 0, hz, 0, h, rz,
+        // back hip triangle (-z)
+        hx, 0, -hz, -hx, 0, -hz, 0, h, -rz,
+        // left slope
+        -hx, 0, hz, 0, h, rz, 0, h, -rz, -hx, 0, hz, 0, h, -rz, -hx, 0, -hz,
+        // right slope
+        hx, 0, hz, hx, 0, -hz, 0, h, -rz, hx, 0, hz, 0, h, -rz, 0, h, rz,
+        // soffit
+        -hx, 0, hz, -hx, 0, -hz, hx, 0, -hz, -hx, 0, hz, hx, 0, -hz, hx, 0, hz,
+      ])
+      const uv = new Float32Array([
+        0, 0, 1, 0, 0.5, 0.8,
+        0, 0, 1, 0, 0.5, 0.8,
+        0, 0, 0.3, 1, 0.7, 1, 0, 0, 0.7, 1, 1, 0,
+        0, 0, 1, 0, 0.7, 1, 0, 0, 0.7, 1, 0.3, 1,
+        0, 0, 0, 0.1, 0.1, 0.1, 0, 0, 0.1, 0.1, 0.1, 0,
+      ])
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.BufferAttribute(v, 3))
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
+      g.computeVertexNormals()
+      return g
+    })()
 
     const windowTex = (() => {
-      // Tiny warm-window texture reused from the building generator via import
-      // would drag in bigger grids; a 2x2 warm grid reads right at house scale.
+      // Tiny warm-window texture; alpha in the emissive map is each window's
+      // personal dusk switch-on threshold (see applyProgressiveWindows).
       const canvas = document.createElement('canvas')
       canvas.width = canvas.height = 64
       const ctx = canvas.getContext('2d')!
-      ctx.fillStyle = '#9a9186'
+      // Light base: the map multiplies against per-instance wall tones AND
+      // scene light, so a mid-gray here turned every shaded facade to mud.
+      ctx.fillStyle = '#c7bfb2'
       ctx.fillRect(0, 0, 64, 64)
       const em = document.createElement('canvas')
       em.width = em.height = 64
@@ -654,7 +774,6 @@ export class Scenery {
         ctx.fillStyle = '#3a3f46'
         ctx.fillRect(x, y, 16, 20)
         if (Math.random() < 0.75) {
-          // Alpha = the window's personal dusk switch-on threshold.
           emCtx.fillStyle = `rgba(255,223,158,${(0.08 + Math.random() * 0.9).toFixed(3)})`
           emCtx.fillRect(x, y, 16, 20)
         }
@@ -663,7 +782,6 @@ export class Scenery {
       map.colorSpace = THREE.SRGBColorSpace
       const emissiveMap = new THREE.CanvasTexture(em)
       emissiveMap.colorSpace = THREE.SRGBColorSpace
-      // Threshold alpha must not be mip-averaged (see makeWindowGridTexture).
       emissiveMap.generateMipmaps = false
       emissiveMap.minFilter = THREE.LinearFilter
       return { map, emissiveMap }
@@ -678,46 +796,73 @@ export class Scenery {
       roughness: 0.9,
     })
     applyProgressiveWindows(this.houseWindowMat)
-    const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), this.houseWindowMat, houseCount)
-    walls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
-    walls.castShadow = walls.receiveShadow = true
 
+    // ——— Instanced pools (capacities cover the worst-case archetype mix) ———
+    const mk = (geo: THREE.BufferGeometry, mat: THREE.Material, cap: number, colored = true, shadows = true) => {
+      const mesh = new THREE.InstancedMesh(geo, mat, cap)
+      if (colored) mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3)
+      if (shadows) mesh.castShadow = true
+      return mesh
+    }
+    const walls = mk(wallGeo, this.houseWindowMat, houseCount * 2)
+    walls.receiveShadow = true
     const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: makeRoofTileTexture(), roughness: 0.8 })
-    const roofs = new THREE.InstancedMesh(roofGeo, roofMat, houseCount)
-    roofs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
-    roofs.castShadow = true
-    // Munefuki ridge cap along every rooftop — the detail that makes a
-    // gabled box read as a Japanese tiled roof.
+    const gables = mk(gableGeo, roofMat, houseCount * 3)
+    const hips = mk(hipGeo, roofMat, Math.ceil(houseCount * 0.9))
     const ridgeCapMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 })
-    const ridgeCaps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), ridgeCapMat, houseCount)
-    ridgeCaps.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * 3), 3)
-    // Irregular grass tufts hugging each house's foundation.
+    const ridgeCaps = mk(new THREE.BoxGeometry(1, 1, 1), ridgeCapMat, houseCount * 2)
+    const doorMat = new THREE.MeshStandardMaterial({ color: 0x2e2622, roughness: 0.8 })
+    const doors = mk(new THREE.PlaneGeometry(0.95, 1.9), doorMat, houseCount, false, false)
+    // Block-wall fences (some wooden), the gated entrance's posts, and the
+    // engawa porch: deck, posts and a lean-to awning.
+    const fenceMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 })
+    const fences = mk(new THREE.BoxGeometry(1, 1, 1), fenceMat, houseCount * 4)
+    const gatePosts = mk(new THREE.BoxGeometry(0.22, 1.15, 0.22), fenceMat, houseCount * 2)
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x8a6a45, roughness: 0.85 })
+    const decks = mk(new THREE.BoxGeometry(1, 0.2, 1.1), woodMat, Math.ceil(houseCount * 0.7), false)
+    const deckPosts = mk(new THREE.CylinderGeometry(0.055, 0.055, 1, 5), woodMat, Math.ceil(houseCount * 0.7) * 3, false)
+    const awningMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 })
+    const awnings = mk(new THREE.BoxGeometry(1, 0.07, 1), awningMat, Math.ceil(houseCount * 0.7))
+    // Packed-earth path from the gate to the front door — the one stroke
+    // that says somebody walks in and out of here every day (Aiko).
+    const pathGeo = new THREE.PlaneGeometry(1, 1)
+    pathGeo.rotateX(-Math.PI / 2)
+    const pathMat = new THREE.MeshStandardMaterial({ color: 0xb5a284, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })
+    const paths = mk(pathGeo, pathMat, houseCount, false, false)
     const tuftMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 })
     const TUFTS_PER_HOUSE = 4
-    const tufts = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), tuftMat, houseCount * TUFTS_PER_HOUSE)
-    tufts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(houseCount * TUFTS_PER_HOUSE * 3), 3)
-    // A front door per house — the one detail that says "someone lives here".
-    const doorMat = new THREE.MeshStandardMaterial({ color: 0x2e2622, roughness: 0.8 })
-    const doors = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.95, 1.9), doorMat, houseCount)
+    // 5×3 sphere: a grass blob needs no more — halves the pool's triangles.
+    const tufts = mk(new THREE.SphereGeometry(1, 5, 3), tuftMat, houseCount * TUFTS_PER_HOUSE, true, false)
 
-    const wallTones = [0xcfc4b0, 0xbfb6a6, 0xd8d2c4, 0xa89c8a, 0xc4b8b0, 0xb0a898]
-    const roofTones = [0x3a4453, 0x46424a, 0x54423a, 0x3d4a42, 0x424b58]
+    const wallTones = [0xcfc4b0, 0xbfb6a6, 0xd8d2c4, 0xa89c8a, 0xc4b8b0, 0xb0a898, 0xd6cbb2]
+    const roofTones = [0x3a4453, 0x46424a, 0x54423a, 0x3d4a42, 0x424b58, 0x5a3a30, 0x2e3a4e]
+    const fenceTones = [0xb3ac9c, 0xa8a294, 0xbfb8a9]
+    const woodFence = 0x6b4a33
 
-    // The zone-contrast lever: quiet stretches are thick with low houses,
-    // mid stretches get a handful mixed with their towers, urban cores get
-    // NONE at all — no traditional houses wedged between skyscrapers.
-    // Bumped ~33% with LOOP_SCALE 4 so the rows read as dense as before.
     const HOUSES_PER_TIER: Record<ZoneTier, number> = { quiet: 34, mid: 8, urban: 0 }
 
-    let idx = 0
-    for (let s = 0; s < N && idx < houseCount; s++) {
+    // Pool cursors.
+    let iWall = 0
+    let iGable = 0
+    let iHip = 0
+    let iRidge = 0
+    let iDoor = 0
+    let iFence = 0
+    let iGatePost = 0
+    let iDeck = 0
+    let iDeckPost = 0
+    let iAwning = 0
+    let iPath = 0
+    let houseIdx = 0
+
+    for (let s = 0; s < N && houseIdx < houseCount; s++) {
       const station = STATIONS[s]
       const quota = HOUSES_PER_TIER[station.theme.tier]
       if (quota <= 0) continue
       const markerA = this.track.markerFor(s).tFraction
       const markerB = this.track.markerFor((s + 1) % N).tFraction
       const span = ((markerB - markerA + 1) % 1) || 0.02
-      const here = Math.min(houseCount - idx, quota)
+      const here = Math.min(houseCount - houseIdx, quota)
       for (let k = 0; k < here; k++) {
         // Keep clear of the platform zone at the segment's start.
         const t = markerA + span * (0.18 + 0.72 * ((k + 0.5) / here))
@@ -725,84 +870,217 @@ export class Scenery {
         const tangent = this.track.tangentAt(t)
         const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
         const side = k % 2 === 0 ? 1 : -1
-        const off = 15 + Math.random() * 16
+        const off = 16.5 + Math.random() * 16
         const pos = p.clone().addScaledVector(normal, side * off)
-        if (this.isNearRoad(pos.x, pos.z, 9)) continue // no houses on the asphalt (covers a 9x9 house's rotated half-diagonal + road half-width)
-        const w = 5 + Math.random() * 4
-        const h = 3.2 + Math.random() * 2.8
-        const d = 5 + Math.random() * 4
-        const yaw = Math.atan2(tangent.x, tangent.z) + (Math.random() - 0.5) * 0.3
+        if (this.isNearRoad(pos.x, pos.z, 10)) continue
+        const w = 5 + Math.random() * 3.5
+        const d = 5 + Math.random() * 3.5
+        // Most entrances FACE THE TRACK (local +Z toward the rails) — the
+        // fences, gates and engawa exist to be seen from the cab — but ~30%
+        // turn their backs, because from a real Tokyo train you mostly see
+        // rears and laundry lines, not a parade of front doors (Haruto).
+        const backTurned = Math.random() < 0.3
+        const yaw = Math.atan2(-side * normal.x, -side * normal.z) + (Math.random() - 0.5) * 0.24 + (backTurned ? Math.PI : 0)
+        const sinY = Math.sin(yaw)
+        const cosY = Math.cos(yaw)
+        // On the hill flanks a footprint this size spans real height: probe
+        // the terrain under the edges too, and let the DOWNHILL spread grow
+        // the volumes underground — a half-buried uphill wall looks like a
+        // cut, a floating downhill corner just looks broken (Rubén's call).
+        const gCenter = groundHeightAt(p.y, side * off)
+        const half = Math.max(w, d) * 0.5 + 1
+        const tHalfFrac = half / this.track.getLength()
+        const gMin = Math.min(
+          gCenter,
+          groundHeightAt(p.y, side * off - half),
+          groundHeightAt(p.y, side * off + half),
+          groundHeightAt(this.track.pointAt(t + tHalfFrac).y, side * off),
+          groundHeightAt(this.track.pointAt(t - tHalfFrac).y, side * off),
+        )
+        const spread = THREE.MathUtils.clamp(gCenter - gMin, 0, 4)
+        const GROUND_Y = gCenter - 0.06
 
-        // Feet BURIED slightly under the local ground: flush bases still show
-        // hairline shadow gaps at grazing angles, sunk ones never do. Reads the
-        // embankment profile so houses on the hill's flank sit ON the slope
-        // instead of hanging at the old flat-world height.
-        const GROUND_Y = groundHeightAt(p.y, side * off) - 0.06
-        dummy.position.set(pos.x, GROUND_Y + h / 2, pos.z)
-        dummy.scale.set(w, h, d)
-        dummy.rotation.set(0, yaw, 0)
-        dummy.updateMatrix()
-        walls.setMatrixAt(idx, dummy.matrix)
-        tint.setHex(wallTones[Math.floor(Math.random() * wallTones.length)])
-        walls.setColorAt(idx, tint)
+        // Local-frame placement helper: rotates (lx,lz) by the house yaw.
+        const put = (
+          mesh: THREE.InstancedMesh, index: number,
+          lx: number, ly: number, lz: number,
+          sx: number, sy: number, sz: number,
+          ry = 0, rx = 0,
+        ) => {
+          dummy.position.set(pos.x + lx * cosY + lz * sinY, GROUND_Y + ly, pos.z - lx * sinY + lz * cosY)
+          dummy.scale.set(sx, sy, sz)
+          dummy.rotation.set(rx, yaw + ry, 0)
+          dummy.updateMatrix()
+          mesh.setMatrixAt(index, dummy.matrix)
+        }
 
-        // Roof sits slightly sunk into the walls (no gap ring at the eaves).
-        const roofScaleY = h * 0.55
-        dummy.position.set(pos.x, GROUND_Y + h - 0.12, pos.z)
-        dummy.scale.set(w, roofScaleY, d)
-        dummy.updateMatrix()
-        roofs.setMatrixAt(idx, dummy.matrix)
+        const wallTone = wallTones[Math.floor(Math.random() * wallTones.length)]
         const roofTone = roofTones[Math.floor(Math.random() * roofTones.length)]
-        // Lifted because the tile texture's gray midtone halves the brightness.
-        tint.setHex(roofTone).multiplyScalar(1.7)
-        roofs.setColorAt(idx, tint)
+        const setRoofTint = (mesh: THREE.InstancedMesh, i: number, mul = 1.7) => {
+          mesh.setColorAt(i, tint.setHex(roofTone).multiplyScalar(mul))
+        }
 
-        // Ridge cap riding the peak, a darker shade of the same tile tone.
-        dummy.position.set(pos.x, GROUND_Y + h - 0.12 + roofScaleY * 0.5, pos.z)
-        dummy.scale.set(0.5, 0.22, d * 1.27)
-        dummy.updateMatrix()
-        ridgeCaps.setMatrixAt(idx, dummy.matrix)
-        tint.setHex(roofTone).multiplyScalar(0.85)
-        ridgeCaps.setColorAt(idx, tint)
+        // ——— Archetype mix ———
+        const archRoll = Math.random()
+        const arch = archRoll < 0.42 ? 'gable' : archRoll < 0.62 ? 'lplan' : archRoll < 0.78 ? 'nikai' : 'engawa'
+        const twoStory = arch === 'nikai'
+        const h = (3.1 + Math.random() * 1.0) * (twoStory ? 1.72 : 1)
+        const mainW = arch === 'nikai' ? w * 0.86 : w
+        const mainD = arch === 'nikai' ? d * 0.86 : d
 
-        // Front door on the +Z face (post-yaw), just proud of the wall.
-        const doorDirX = Math.sin(yaw)
-        const doorDirZ = Math.cos(yaw)
-        dummy.position.set(pos.x + doorDirX * (d / 2 + 0.02), GROUND_Y + 0.95, pos.z + doorDirZ * (d / 2 + 0.02))
-        dummy.scale.set(1, 1, 1)
-        dummy.rotation.set(0, yaw, 0)
-        dummy.updateMatrix()
-        doors.setMatrixAt(idx, dummy.matrix)
+        // Main volume, stretched down by the slope spread so its downhill
+        // face reaches the ground. Tones lifted ~20%: the entrance facades
+        // face the track (away from the southern sun much of the day) and
+        // unlifted they all sat in murk.
+        const hEff = h + spread
+        put(walls, iWall, 0, h - hEff / 2, 0, mainW, hEff, mainD)
+        walls.setColorAt(iWall, tint.setHex(wallTone).multiplyScalar(1.2))
+        iWall++
+
+        // Roof + ridge for the main volume.
+        const roofScaleY = (twoStory ? h * 0.3 : h * 0.55) * (0.9 + Math.random() * 0.2)
+        if (arch === 'gable' || arch === 'lplan') {
+          put(gables, iGable, 0, h - 0.12, 0, mainW, roofScaleY, mainD)
+          setRoofTint(gables, iGable)
+          iGable++
+          put(ridgeCaps, iRidge, 0, h - 0.12 + roofScaleY * 0.5, 0, 0.5, 0.22, mainD * 1.27)
+          ridgeCaps.setColorAt(iRidge, tint.setHex(roofTone).multiplyScalar(0.85))
+          iRidge++
+        } else {
+          // Yosemune hip; the two-story version stacks a small gable on top
+          // of it — the irimoya silhouette.
+          put(hips, iHip, 0, h - 0.12, 0, mainW, roofScaleY, mainD)
+          setRoofTint(hips, iHip)
+          iHip++
+          if (twoStory) {
+            put(gables, iGable, 0, h - 0.12 + roofScaleY * 0.55, 0, mainW * 0.5, roofScaleY * 0.75, mainD * 0.62)
+            setRoofTint(gables, iGable)
+            iGable++
+            put(ridgeCaps, iRidge, 0, h - 0.12 + roofScaleY * 0.55 + roofScaleY * 0.75 * 0.5, 0, 0.4, 0.18, mainD * 0.62 * 1.27)
+            ridgeCaps.setColorAt(iRidge, tint.setHex(roofTone).multiplyScalar(0.85))
+            iRidge++
+          }
+        }
+
+        // L-plan wing: a lower volume to one flank, ridge turned 90°.
+        if (arch === 'lplan') {
+          const wingSide = Math.random() < 0.5 ? 1 : -1
+          const wingW = mainW * 0.55
+          const wingH = h * 0.74
+          const wingD = mainD * 0.62
+          const wingX = wingSide * (mainW / 2 + wingW / 2 - 0.35)
+          const wingZ = mainD * 0.12
+          const wingHEff = wingH + spread
+          put(walls, iWall, wingX, wingH - wingHEff / 2, wingZ, wingW, wingHEff, wingD)
+          walls.setColorAt(iWall, tint.setHex(wallTone).multiplyScalar(1.14))
+          iWall++
+          put(gables, iGable, wingX, wingH - 0.1, wingZ, wingD, wingH * 0.5, wingW, Math.PI / 2)
+          setRoofTint(gables, iGable)
+          iGable++
+        }
+
+        // Engawa porch: raised wooden deck along the front, posts, and a
+        // lean-to awning hanging off the wall above it.
+        if (arch === 'engawa' || (arch === 'nikai' && Math.random() < 0.5)) {
+          const deckW = mainW * 0.86
+          const deckZ = mainD / 2 + 0.62
+          put(decks, iDeck, 0, 0.42, deckZ, deckW, 1, 1)
+          iDeck++
+          for (let dp = 0; dp < 3; dp++) {
+            put(deckPosts, iDeckPost, (dp - 1) * deckW * 0.44, 0.9 - spread / 2, deckZ + 0.42, 1, 1.8 + spread, 1)
+            iDeckPost++
+          }
+          put(awnings, iAwning, 0, Math.min(h - 0.5, 2.5), deckZ - 0.1, deckW + 0.5, 1, 1.6, 0, 0.34)
+          awnings.setColorAt(iAwning, tint.setHex(roofTone).multiplyScalar(1.1))
+          iAwning++
+        }
+
+        // Front door, centered on the entrance face.
+        put(doors, iDoor, 0, 0.95, mainD / 2 + 0.03, 1, 1, 1)
+        iDoor++
+
+        // Gate→door path, only where the yard sits on near-flat ground (a
+        // rigid quad across a slope would hover or knife in).
+        if (spread < 0.4) {
+          const pathLen = 2.2 // wall face → gate line (1.9) plus a lip under the door
+          put(paths, iPath, 0, 0.05, mainD / 2 + pathLen / 2 - 0.3, 1.15, 1, pathLen)
+          iPath++
+        }
+
+        // ——— The yard: block wall + gate, the detail Rubén asked for by
+        // name. Front fence flanks a gate gap in front of the door; short
+        // returns run down both sides.
+        const fx = mainW / 2 + 1.7
+        const fz = mainD / 2 + 1.9
+        const gateHalf = 0.85
+        const frontLen = fx - gateHalf
+        const fenceTone = Math.random() < 0.25 ? woodFence : fenceTones[Math.floor(Math.random() * fenceTones.length)]
+        const fenceH = 0.75 + Math.random() * 0.25
+        const fenceHEff = fenceH + spread // walls of the yard follow the house underground
+        // Front-left / front-right of the gate.
+        put(fences, iFence, -(gateHalf + frontLen / 2), fenceH - fenceHEff / 2, fz, frontLen, fenceHEff, 0.14)
+        fences.setColorAt(iFence, tint.setHex(fenceTone))
+        iFence++
+        put(fences, iFence, gateHalf + frontLen / 2, fenceH - fenceHEff / 2, fz, frontLen, fenceHEff, 0.14)
+        fences.setColorAt(iFence, tint.setHex(fenceTone))
+        iFence++
+        // Side returns.
+        for (const sideX of [-fx, fx]) {
+          put(fences, iFence, sideX, fenceH - fenceHEff / 2, fz - fz * 0.55, 0.14, fenceHEff, fz * 1.1)
+          fences.setColorAt(iFence, tint.setHex(fenceTone).multiplyScalar(0.94))
+          iFence++
+        }
+        // Gate posts + the little kirizuma roof over the gate.
+        for (const gp of [-gateHalf, gateHalf]) {
+          put(gatePosts, iGatePost, gp, 0.58 - spread / 2, fz, 1, 1 + spread / 1.15, 1)
+          gatePosts.setColorAt(iGatePost, tint.setHex(fenceTone).multiplyScalar(0.85))
+          iGatePost++
+        }
+        put(gables, iGable, 0, 1.2, fz, 2.3, 0.5, 0.8)
+        setRoofTint(gables, iGable, 1.5)
+        iGable++
 
         // Scruffy grass ring at the foundation.
         for (let g = 0; g < TUFTS_PER_HOUSE; g++) {
-          const ti2 = idx * TUFTS_PER_HOUSE + g
+          const ti2 = houseIdx * TUFTS_PER_HOUSE + g
           const ang = Math.random() * Math.PI * 2
-          const rx = (w / 2 + 0.25) * Math.cos(ang)
-          const rz = (d / 2 + 0.25) * Math.sin(ang)
-          dummy.position.set(pos.x + rx, GROUND_Y + 0.12, pos.z + rz)
-          dummy.scale.set(0.3 + Math.random() * 0.35, 0.14 + Math.random() * 0.16, 0.3 + Math.random() * 0.35)
-          dummy.rotation.set(0, Math.random() * Math.PI, 0)
-          dummy.updateMatrix()
-          tufts.setMatrixAt(ti2, dummy.matrix)
+          put(
+            tufts, ti2,
+            (mainW / 2 + 0.35) * Math.cos(ang), 0.12, (mainD / 2 + 0.35) * Math.sin(ang),
+            0.3 + Math.random() * 0.35, 0.14 + Math.random() * 0.16, 0.3 + Math.random() * 0.35,
+            Math.random() * Math.PI,
+          )
           tint.setHSL(0.25 + Math.random() * 0.09, 0.32 + Math.random() * 0.15, 0.2 + Math.random() * 0.12)
           tufts.setColorAt(ti2, tint)
         }
-        idx++
+        houseIdx++
       }
     }
-    walls.count = roofs.count = ridgeCaps.count = doors.count = idx
-    tufts.count = idx * TUFTS_PER_HOUSE
-    walls.instanceMatrix.needsUpdate = true
-    roofs.instanceMatrix.needsUpdate = true
-    ridgeCaps.instanceMatrix.needsUpdate = true
-    doors.instanceMatrix.needsUpdate = true
-    tufts.instanceMatrix.needsUpdate = true
-    if (walls.instanceColor) walls.instanceColor.needsUpdate = true
-    if (roofs.instanceColor) roofs.instanceColor.needsUpdate = true
-    if (ridgeCaps.instanceColor) ridgeCaps.instanceColor.needsUpdate = true
-    if (tufts.instanceColor) tufts.instanceColor.needsUpdate = true
-    this.scene.add(walls, roofs, ridgeCaps, doors, tufts)
+
+    walls.count = iWall
+    gables.count = iGable
+    hips.count = iHip
+    ridgeCaps.count = iRidge
+    doors.count = iDoor
+    fences.count = iFence
+    gatePosts.count = iGatePost
+    decks.count = iDeck
+    deckPosts.count = iDeckPost
+    awnings.count = iAwning
+    paths.count = iPath
+    tufts.count = houseIdx * TUFTS_PER_HOUSE
+    const pools = [walls, gables, hips, ridgeCaps, doors, fences, gatePosts, decks, deckPosts, awnings, paths, tufts]
+    for (const mesh of pools) {
+      mesh.instanceMatrix.needsUpdate = true
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+      this.scene.add(mesh)
+    }
+    // Winter snow-caps every roof surface; the foundation tufts dry with the fields.
+    this.seasonalPools.push(registerPool('roof', gables.instanceColor!))
+    this.seasonalPools.push(registerPool('roof', hips.instanceColor!))
+    this.seasonalPools.push(registerPool('roof', ridgeCaps.instanceColor!))
+    this.seasonalPools.push(registerPool('roof', awnings.instanceColor!))
+    this.seasonalPools.push(registerPool('scrub', tufts.instanceColor!))
   }
 
   /**
@@ -1083,6 +1361,7 @@ export class Scenery {
     mountains.instanceMatrix.needsUpdate = true
     if (mountains.instanceColor) mountains.instanceColor.needsUpdate = true
     this.scene.add(mountains)
+    this.seasonalPools.push(registerPool('mountain', mountains.instanceColor!))
   }
 
   /**
@@ -1175,11 +1454,16 @@ export class Scenery {
     // ——— Garden wood on the flanks: trunks + layered canopies, some pines,
     // a few maples for warmth. Everything stands on the shared terrain profile.
     const TREES = 150
+    /** Hand-placed maples framing the station approach — the momiji witnesses that share the autumn frame with the evergreen sakura. */
+    const APPROACH_MAPLES: [number, number, number][] = [
+      [-30, -17, 1.5], [-44, -22, 1.7], [-58, -18, 1.6], [-74, -24, 1.45], [-36, 17, 1.4],
+    ]
+    const CAP = TREES + APPROACH_MAPLES.length
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3527, roughness: 0.95 })
-    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.24, 0.36, 2.4, 6), trunkMat, TREES)
+    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.24, 0.36, 2.4, 6), trunkMat, CAP)
     const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 })
-    const canopies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 7, 6), canopyMat, TREES * 2)
-    canopies.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(TREES * 2 * 3), 3)
+    const canopies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 7, 6), canopyMat, CAP * 2)
+    canopies.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 2 * 3), 3)
     const hillPineMat = new THREE.MeshStandardMaterial({ color: 0x2e4a2e, roughness: 0.95 })
     const hillPines = new THREE.InstancedMesh(new THREE.ConeGeometry(1.6, 4.6, 7), hillPineMat, Math.ceil(TREES * 0.4))
     hillPines.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.ceil(TREES * 0.4) * 3), 3)
@@ -1225,7 +1509,6 @@ export class Scenery {
       dummy.rotation.set(0, Math.random() * Math.PI, 0)
       dummy.updateMatrix()
       trunks.setMatrixAt(ti++, dummy.matrix)
-      const maple = kind > 0.82 // a warm handful, Rikugien style
       for (let b = 0; b < 2; b++) {
         const br = (1.7 + Math.random() * 1.1) * scale
         dummy.position.set(
@@ -1237,8 +1520,41 @@ export class Scenery {
         dummy.rotation.set(0, 0, 0)
         dummy.updateMatrix()
         canopies.setMatrixAt(ci, dummy.matrix)
-        if (maple) tint.setHSL(0.045 + Math.random() * 0.03, 0.62, 0.34 + Math.random() * 0.08)
-        else tint.setHSL(0.28 + Math.random() * 0.08, 0.4, 0.26 + Math.random() * 0.1)
+        // All summer-green as built: the SEASON turns the hillside — these
+        // are the maples/broadleafs that go full momiji in autumn (the old
+        // permanent red handful graduated into the seasonal system).
+        tint.setHSL(0.27 + Math.random() * 0.09, 0.42, 0.26 + Math.random() * 0.1)
+        canopies.setColorAt(ci, tint)
+        ci++
+      }
+    }
+    // The momiji witnesses: guaranteed broadleafs framing the last ~80 units
+    // into the hill station, so the autumn arrival shows blazing maples and
+    // the platform's blooming sakura in one glance (the panel's ask).
+    for (const [along, lat, scale] of APPROACH_MAPLES) {
+      const t = center + along / len
+      const p = this.track.pointAt(t)
+      const tangent = this.track.tangentAt(t)
+      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize()
+      const pos = p.clone().addScaledVector(normal, lat)
+      const groundY = groundHeightAt(p.y, lat)
+      dummy.position.set(pos.x, groundY + 1.2 * scale - 0.1, pos.z)
+      dummy.scale.setScalar(scale)
+      dummy.rotation.set(0, Math.random() * Math.PI, 0)
+      dummy.updateMatrix()
+      trunks.setMatrixAt(ti++, dummy.matrix)
+      for (let b = 0; b < 2; b++) {
+        const br = (1.9 + Math.random() * 1.0) * scale
+        dummy.position.set(
+          pos.x + (Math.random() - 0.5) * 1.6 * scale,
+          groundY + (2.6 + b * 1.1 + Math.random() * 0.5) * scale,
+          pos.z + (Math.random() - 0.5) * 1.6 * scale,
+        )
+        dummy.scale.set(br, br * 0.78, br)
+        dummy.rotation.set(0, 0, 0)
+        dummy.updateMatrix()
+        canopies.setMatrixAt(ci, dummy.matrix)
+        tint.setHSL(0.26 + Math.random() * 0.06, 0.45, 0.3 + Math.random() * 0.08)
         canopies.setColorAt(ci, tint)
         ci++
       }
@@ -1252,6 +1568,8 @@ export class Scenery {
     if (canopies.instanceColor) canopies.instanceColor.needsUpdate = true
     if (hillPines.instanceColor) hillPines.instanceColor.needsUpdate = true
     this.scene.add(trunks, canopies, hillPines)
+    this.seasonalPools.push(registerPool('broadleaf', canopies.instanceColor!))
+    this.seasonalPools.push(registerPool('pine', hillPines.instanceColor!))
   }
 
   /**
@@ -1317,7 +1635,10 @@ export class Scenery {
         const pos = p.clone().addScaledVector(normal, -7.5) // driver's left
         const groundY = groundHeightAt(p.y, -7.5)
 
-        dummy.position.set(pos.x, groundY + 1.2, pos.z)
+        // Pole tucked BEHIND the board plane (a step along the travel
+        // direction): centered on it, the cylinder's belly poked through
+        // the sign face right where the approaching cab reads it.
+        dummy.position.set(pos.x + tangent.x * 0.18, groundY + 1.2, pos.z + tangent.z * 0.18)
         dummy.rotation.set(0, 0, 0)
         dummy.updateMatrix()
         poles.setMatrixAt(pi++, dummy.matrix)
@@ -1497,12 +1818,20 @@ export class Scenery {
       lights.b.emissiveIntensity = !this.crossingBellActive || this.crossingBlinkPhase ? 0.05 : 2.2
     }
 
-    // Sakura petals drift and fall on a gentle sinusoidal breeze.
+    // Sakura petals drift and fall on a gentle sinusoidal breeze. Outside
+    // spring only the evergreen (hill garden) clusters keep shedding; the
+    // rest park their petals under the world.
     if (this.petalsMesh) {
       const attr = this.petalsMesh.geometry.getAttribute('position') as THREE.BufferAttribute
       const arr = attr.array as Float32Array
       const n = arr.length / 3
+      const springActive = this.season === 'spring'
       for (let i = 0; i < n; i++) {
+        const cluster = this.sakuraClusters[(i / PETALS_PER_CLUSTER) | 0]
+        if (!springActive && !cluster.always) {
+          arr[i * 3 + 1] = -120
+          continue
+        }
         const cx = this.petalSeeds[i * 4]
         const cz = this.petalSeeds[i * 4 + 1]
         const phase = this.petalSeeds[i * 4 + 2]
@@ -1515,10 +1844,26 @@ export class Scenery {
       attr.needsUpdate = true
     }
 
-    // Clouds: white by day, dusk-tinted, near-invisible dark at night.
+    // Clouds: white by day, dusk-tinted, near-invisible dark at night —
+    // and heavier, grayer, more opaque as the overcast closes in.
+    const o = dayNight.overcast
     const tint = this.cloudMat.uniforms.tint.value as THREE.Color
     tint.copy(horizon).lerp(WHITE, 0.55).multiplyScalar(1 - night * 0.82)
-    this.cloudMat.uniforms.opacity.value = 0.85 - night * 0.55
+    if (o > 0.001) tint.lerp(OVERCAST_CLOUD, 0.7 * o)
+    this.cloudMat.uniforms.opacity.value = (0.85 - night * 0.55) * (1 + 0.18 * o)
+  }
+
+  /**
+   * One-off seasonal repaint: every registered pool remaps its as-built
+   * colors, Fuji swaps snowlines, and the petal gate flips. Costs a few
+   * thousand HSL conversions on the frame the player changes season — zero
+   * every other frame.
+   */
+  setSeason(season: Season) {
+    this.season = season
+    for (const pool of this.seasonalPools) applySeasonToPool(pool, season)
+    this.fujiSnowRegular.visible = season !== 'winter'
+    this.fujiSnowWinter.visible = season === 'winter'
   }
 }
 
@@ -1531,3 +1876,6 @@ const SKYTREE_STEEL = new THREE.Color(0xb8c4cc)
 const SKYTREE_IKI = new THREE.Color(0x9fd8ff)
 const SKYTREE_MIYABI = new THREE.Color(0xc9a0e8)
 const WHITE = new THREE.Color(0xffffff)
+// Light ash-gray: snow/rain clouds over a pearl sky read as weather, not
+// soot (the first pick, a charcoal 0x5d6670, looked like smoke plumes).
+const OVERCAST_CLOUD = new THREE.Color(0x99a1ab)

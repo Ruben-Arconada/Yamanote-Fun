@@ -181,6 +181,29 @@ canvas.game-canvas {
   pointer-events: auto;
 }
 .time-picker.hidden { display: none; }
+/* Season / weather chips: compact squares in the clock's family. */
+.hud-atmo-btn {
+  pointer-events: auto;
+  background: var(--chip-bg);
+  border: var(--chip-border);
+  box-shadow: var(--chip-shadow);
+  backdrop-filter: var(--chip-blur);
+  color: var(--text-primary);
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  font-size: 17px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+.hud-atmo-btn:active { transform: scale(0.95); }
+/* Fallback anchors; UI.ts re-anchors each picker under its chip on open. */
+.season-picker { left: calc(var(--safe-left) + 152px); }
+.weather-picker { left: calc(var(--safe-left) + 200px); }
+.time-picker button.active { background: rgba(255, 206, 74, 0.25); }
 .time-picker button {
   background: rgba(255, 255, 255, 0.08);
   border: none;
@@ -666,6 +689,10 @@ canvas.game-canvas {
 }
 
 @media (orientation: portrait) and (max-width: 700px) {
+  /* Narrow portrait: the top bar may wrap and the atmo chips shrink, so
+     the TL01/TL02 pills never paint over them. */
+  .hud-top { flex-wrap: wrap; }
+  .hud-atmo-btn { width: 34px; height: 34px; font-size: 14px; }
   .hud-clock { min-width: 0; padding: var(--space-1) var(--space-2); }
   .hud-stations { gap: var(--space-1); }
   .hud-station-now, .hud-station-next { min-width: 0; padding: var(--space-1) 7px; }

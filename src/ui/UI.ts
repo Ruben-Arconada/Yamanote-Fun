@@ -1,6 +1,7 @@
 import { STATIONS } from '../data/stations'
 import type { StopResult } from '../game/Train'
 import { TEAM } from '../data/team'
+import { SEASONS, WEATHERS, type Season, type Weather } from '../game/Seasons'
 
 export interface UICallbacks {
   onStart: () => void
@@ -10,6 +11,9 @@ export interface UICallbacks {
   onTimeSet: (hour: number) => void
   /** The player tapped the door button (open or close — the game decides). */
   onDoorAction: () => void
+  /** Season / weather chosen from the HUD pickers. */
+  onSeasonSet: (season: Season) => void
+  onWeatherSet: (weather: Weather) => void
 }
 
 /** What the door button offers right now — mirrors the train's door state. */
@@ -96,8 +100,16 @@ export class UI {
           <span class="hud-clock-time">07:30</span>
           <span class="hud-clock-phase">Mañana</span>
         </button>
+        <button class="hud-atmo-btn hud-season-btn" aria-label="Estación del año">🌸</button>
+        <button class="hud-atmo-btn hud-weather-btn" aria-label="Clima">☀️</button>
         <div class="time-picker hidden">
           ${TIME_PRESETS.map((p) => `<button data-hour="${p.hour}">${p.label}</button>`).join('')}
+        </div>
+        <div class="time-picker season-picker hidden">
+          ${SEASONS.map((s) => `<button data-season="${s.id}">${s.icon} ${s.label}</button>`).join('')}
+        </div>
+        <div class="time-picker weather-picker hidden">
+          ${WEATHERS.map((w) => `<button data-weather="${w.id}">${w.icon} ${w.label}</button>`).join('')}
         </div>
         <div class="hud-stations">
           <div class="hud-stations-row">
@@ -161,15 +173,71 @@ export class UI {
 
     this.hud.querySelector('.hud-menu-btn')!.addEventListener('click', () => this.toggleMenu())
 
-    // Clock tap → time-of-day picker. Tapping a preset jumps the cycle there.
-    const picker = this.hud.querySelector('.time-picker') as HTMLDivElement
-    this.hud.querySelector('.hud-clock')!.addEventListener('click', () => picker.classList.toggle('hidden'))
-    picker.querySelectorAll('button').forEach((btn) => {
+    // Three sibling pickers off the top bar (hour / season / weather), all
+    // the same pattern: chip toggles its own list, opening one closes the
+    // rest, tapping an option applies and closes.
+    const timePicker = this.hud.querySelector('.time-picker:not(.season-picker):not(.weather-picker)') as HTMLDivElement
+    const seasonPicker = this.hud.querySelector('.season-picker') as HTMLDivElement
+    const weatherPicker = this.hud.querySelector('.weather-picker') as HTMLDivElement
+    const allPickers = [timePicker, seasonPicker, weatherPicker]
+    const chipOf = new Map<HTMLDivElement, HTMLButtonElement>([
+      [timePicker, this.hud.querySelector('.hud-clock') as HTMLButtonElement],
+      [seasonPicker, this.hud.querySelector('.hud-season-btn') as HTMLButtonElement],
+      [weatherPicker, this.hud.querySelector('.hud-weather-btn') as HTMLButtonElement],
+    ])
+    const syncAria = () => {
+      for (const [p, chip] of chipOf) chip.setAttribute('aria-expanded', String(!p.classList.contains('hidden')))
+    }
+    const toggleOnly = (which: HTMLDivElement) => {
+      for (const p of allPickers) p.classList.toggle('hidden', p !== which || !p.classList.contains('hidden'))
+      // Anchor the list under its own chip: hard-coded offsets break the
+      // moment anyone touches the top-bar layout.
+      if (!which.classList.contains('hidden')) {
+        const hudRect = this.hud.getBoundingClientRect()
+        const chipRect = chipOf.get(which)!.getBoundingClientRect()
+        which.style.left = `${Math.max(8, Math.min(chipRect.left - hudRect.left, hudRect.width - 180))}px`
+      }
+      syncAria()
+    }
+    for (const [p, chip] of chipOf) chip.addEventListener('click', () => toggleOnly(p))
+    // A tap anywhere else dismisses whatever list is open.
+    document.addEventListener('pointerdown', (e) => {
+      const target = e.target as HTMLElement
+      if (target.closest('.time-picker, .hud-clock, .hud-atmo-btn')) return
+      for (const p of allPickers) p.classList.add('hidden')
+      syncAria()
+    })
+    timePicker.querySelectorAll('button').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.cb.onTimeSet(parseFloat((btn as HTMLElement).dataset.hour!))
-        picker.classList.add('hidden')
+        timePicker.classList.add('hidden')
+        syncAria()
       })
     })
+    seasonPicker.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.cb.onSeasonSet((btn as HTMLElement).dataset.season as Season)
+        seasonPicker.classList.add('hidden')
+        syncAria()
+      })
+    })
+    weatherPicker.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.cb.onWeatherSet((btn as HTMLElement).dataset.weather as Weather)
+        weatherPicker.classList.add('hidden')
+        syncAria()
+      })
+    })
+  }
+
+  /** Reflects the applied season/weather on the HUD chips and marks the active options. */
+  setAtmo(season: Season, weather: Weather) {
+    const s = SEASONS.find((x) => x.id === season)!
+    const w = WEATHERS.find((x) => x.id === weather)!
+    ;(this.hud.querySelector('.hud-season-btn') as HTMLButtonElement).textContent = s.icon
+    ;(this.hud.querySelector('.hud-weather-btn') as HTMLButtonElement).textContent = w.icon
+    this.hud.querySelectorAll<HTMLButtonElement>('.season-picker button').forEach((b) => b.classList.toggle('active', b.dataset.season === season))
+    this.hud.querySelectorAll<HTMLButtonElement>('.weather-picker button').forEach((b) => b.classList.toggle('active', b.dataset.weather === weather))
   }
 
   /** Paints a station's dot with its stop result; the color persists for the rest of the loop. */
