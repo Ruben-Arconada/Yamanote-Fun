@@ -1,7 +1,7 @@
 {
   "name": "tokyo-loop",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.2.0-rc.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

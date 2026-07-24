@@ -21,7 +21,9 @@ en `doors_open` una vez `boardingComplete`.
   `CLOSE_HURRY_SECONDS` (5,5 s) y auto-cierre a `CLOSE_AUTO_SECONDS` (9,5 s) —
   sin bonus, imposible bloquearse.
 - El embarque dura `BOARDING_BASE_SECONDS + crowdDensityForHour(hora) ×
-  BOARDING_CROWD_SECONDS` (5,5–11 s): hora punta = andén lleno = más espera.
+  BOARDING_CROWD_SECONDS` — rango efectivo ≈6,4–11 s (la densidad tiene un
+  suelo de 0,16, así que el mínimo teórico de 5,5 s nunca se da): hora punta =
+  andén lleno = más espera.
 - Fases del botón en el HUD: `idle / can-open / boarding (con barra) /
   can-close / closing` — ver `DoorPhase` en UI.ts.
 

@@ -1,6 +1,6 @@
 # Estrategia gráfica — Tokyo Loop
 
-Objetivo: estética "muy buena" (referente: la atmósfera de Cloudpunk/Nivalis de ION LANDS) sin bajar de 60 fps en móvil de gama media. Estado actual: ~100 draw calls, ~430k triángulos, todo instanciado, texturas canvas procedurales.
+Objetivo: estética "muy buena" (referente: la atmósfera de Cloudpunk/Nivalis de ION LANDS) sin bajar de 60 fps en móvil de gama media. Estado actual (v0.1.5, ver cifras vigentes en `SISTEMAS-V014-V015.md`): 150-164 draw calls según vista (presupuesto ~160, regla de Marco), ~670k triángulos diurnos CON pase de sombras (~400k de noche), todo instanciado, texturas canvas procedurales.
 
 ## ¿Voxels? No — y por qué
 

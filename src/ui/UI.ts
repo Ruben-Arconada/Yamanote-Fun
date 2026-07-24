@@ -103,12 +103,15 @@ export class UI {
         <button class="hud-atmo-btn hud-season-btn" aria-label="Estación del año">🌸</button>
         <button class="hud-atmo-btn hud-weather-btn" aria-label="Clima">☀️</button>
         <div class="time-picker hidden">
+          <small class="picker-title">Hora del día</small>
           ${TIME_PRESETS.map((p) => `<button data-hour="${p.hour}">${p.label}</button>`).join('')}
         </div>
         <div class="time-picker season-picker hidden">
+          <small class="picker-title">Estación del año</small>
           ${SEASONS.map((s) => `<button data-season="${s.id}">${s.icon} ${s.label}</button>`).join('')}
         </div>
         <div class="time-picker weather-picker hidden">
+          <small class="picker-title">Clima</small>
           ${WEATHERS.map((w) => `<button data-weather="${w.id}">${w.icon} ${w.label}</button>`).join('')}
         </div>
         <div class="hud-stations">

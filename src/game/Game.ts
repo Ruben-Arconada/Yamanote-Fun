@@ -497,7 +497,7 @@ export class Game {
 
     // Wide ground plane so the world doesn't feel like it ends at the ballast
     // edge — with a faint city-block texture so it reads as streets from the
-    // cab. Sized well past the skyline belt at LOOP_SCALE 3 so no edge is
+    // cab. Sized well past the skyline belt (see LOOP_SCALE in Track.ts) so no edge is
     // ever visible, even with the longer night fog range.
     const groundTex = makeGroundTexture()
     groundTex.repeat.set(56, 56)
@@ -876,6 +876,9 @@ export class Game {
   private onResize() {
     const w = window.innerWidth
     const h = window.innerHeight
+    // Backgrounded rotations can report 0×0 for a beat — sizing the drawing
+    // buffer to zero blanks the canvas until the next real resize.
+    if (w === 0 || h === 0) return
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(w, h)
